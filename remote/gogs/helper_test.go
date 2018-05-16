@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gogs
 
 import (
@@ -165,7 +179,7 @@ func Test_parse(t *testing.T) {
 				HtmlUrl:  "http://gogs.golang.org/gophers/hello-world",
 				Private:  true,
 			}
-			repo := toRepo(&from)
+			repo := toRepo(&from, false)
 			g.Assert(repo.FullName).Equal(from.FullName)
 			g.Assert(repo.Owner).Equal(from.Owner.UserName)
 			g.Assert(repo.Name).Equal("hello-world")
@@ -174,21 +188,6 @@ func Test_parse(t *testing.T) {
 			g.Assert(repo.Clone).Equal(from.CloneUrl)
 			g.Assert(repo.Avatar).Equal(from.Owner.AvatarUrl)
 			g.Assert(repo.IsPrivate).Equal(from.Private)
-		})
-
-		g.It("Should return a RepoLite struct from a Gogs Repo", func() {
-			from := gogs.Repository{
-				FullName: "gophers/hello-world",
-				Owner: gogs.User{
-					UserName:  "gordon",
-					AvatarUrl: "http://1.gravatar.com/avatar/8c58a0be77ee441bb8f8595b7f1b4e87",
-				},
-			}
-			repo := toRepoLite(&from)
-			g.Assert(repo.FullName).Equal(from.FullName)
-			g.Assert(repo.Owner).Equal(from.Owner.UserName)
-			g.Assert(repo.Name).Equal("hello-world")
-			g.Assert(repo.Avatar).Equal(from.Owner.AvatarUrl)
 		})
 
 		g.It("Should correct a malformed avatar url", func() {

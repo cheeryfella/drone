@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package remote
 
 //go:generate mockery -name Remote -output mock -case=underscore
@@ -23,15 +37,11 @@ type Remote interface {
 	// Teams fetches a list of team memberships from the remote system.
 	Teams(u *model.User) ([]*model.Team, error)
 
-	// TeamPerm fetches the named organization permissions from
-	// the remote system for the specified user.
-	TeamPerm(u *model.User, org string) (*model.Perm, error)
-
 	// Repo fetches the named repository from the remote system.
 	Repo(u *model.User, owner, repo string) (*model.Repo, error)
 
 	// Repos fetches a list of repos from the remote system.
-	Repos(u *model.User) ([]*model.RepoLite, error)
+	Repos(u *model.User) ([]*model.Repo, error)
 
 	// Perm fetches the named repository permissions from
 	// the remote system for the specified user.
@@ -89,19 +99,13 @@ func Teams(c context.Context, u *model.User) ([]*model.Team, error) {
 	return FromContext(c).Teams(u)
 }
 
-// TeamPerm fetches the named organization permissions from
-// the remote system for the specified user.
-func TeamPerm(c context.Context, u *model.User, org string) (*model.Perm, error) {
-	return FromContext(c).TeamPerm(u, org)
-}
-
 // Repo fetches the named repository from the remote system.
 func Repo(c context.Context, u *model.User, owner, repo string) (*model.Repo, error) {
 	return FromContext(c).Repo(u, owner, repo)
 }
 
 // Repos fetches a list of repos from the remote system.
-func Repos(c context.Context, u *model.User) ([]*model.RepoLite, error) {
+func Repos(c context.Context, u *model.User) ([]*model.Repo, error) {
 	return FromContext(c).Repos(u)
 }
 
@@ -113,12 +117,12 @@ func Perm(c context.Context, u *model.User, owner, repo string) (*model.Perm, er
 
 // File fetches a file from the remote repository and returns in string format.
 func File(c context.Context, u *model.User, r *model.Repo, b *model.Build, f string) (out []byte, err error) {
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 12; i++ {
 		out, err = FromContext(c).File(u, r, b, f)
 		if err == nil {
 			return
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(5 * time.Second)
 	}
 	return
 }
@@ -163,4 +167,19 @@ func Refresh(c context.Context, u *model.User) (bool, error) {
 		return false, nil
 	}
 	return refresher.Refresh(u)
+}
+
+// FileBackoff fetches the file using an exponential backoff.
+// TODO replace this with a proper backoff
+func FileBackoff(remote Remote, u *model.User, r *model.Repo, b *model.Build, f string) (out []byte, err error) {
+	for i := 0; i < 5; i++ {
+		select {
+		case <-time.After(time.Second * time.Duration(i)):
+			out, err = remote.File(u, r, b, f)
+			if err == nil {
+				return
+			}
+		}
+	}
+	return
 }

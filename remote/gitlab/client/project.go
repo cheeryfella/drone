@@ -1,17 +1,30 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package client
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strconv"
 	"strings"
 )
 
 const (
-	searchUrl         = "/projects/search/:query"
 	projectsUrl       = "/projects"
 	projectUrl        = "/projects/:id"
-	repoUrlRawFile    = "/projects/:id/repository/blobs/:sha"
-	repoUrlRawFileRef = "/projects/:id/repository/files"
+	repoUrlRawFileRef = "/projects/:id/repository/files/:filepath"
 	commitStatusUrl   = "/projects/:id/statuses/:sha"
 )
 
@@ -45,8 +58,9 @@ func (g *Client) AllProjects(hide_archives bool) ([]*Project, error) {
 // Get a list of projects owned by the authenticated user.
 func (c *Client) Projects(page int, per_page int, hide_archives bool) ([]*Project, error) {
 	projectsOptions := QMap{
-		"page":     strconv.Itoa(page),
-		"per_page": strconv.Itoa(per_page),
+		"page":       strconv.Itoa(page),
+		"per_page":   strconv.Itoa(per_page),
+		"membership": "true",
 	}
 
 	if hide_archives {
@@ -79,39 +93,31 @@ func (c *Client) Project(id string) (*Project, error) {
 	return project, err
 }
 
-// Get Raw file content
-func (c *Client) RepoRawFile(id, sha, filepath string) ([]byte, error) {
-	url, opaque := c.ResourceUrl(
-		repoUrlRawFile,
-		QMap{
-			":id":  id,
-			":sha": sha,
-		},
-		QMap{
-			"filepath": filepath,
-		},
-	)
-
-	contents, err := c.Do("GET", url, opaque, nil)
-
-	return contents, err
-}
-
 func (c *Client) RepoRawFileRef(id, ref, filepath string) ([]byte, error) {
+	var fileRef FileRef
 	url, opaque := c.ResourceUrl(
 		repoUrlRawFileRef,
 		QMap{
-			":id": id,
+			":id":       id,
+			":filepath": filepath,
 		},
 		QMap{
-			"filepath": filepath,
-			"ref":      ref,
+			"ref": ref,
 		},
 	)
 
 	contents, err := c.Do("GET", url, opaque, nil)
+	if err != nil {
+		return nil, err
+	}
 
-	return contents, err
+	err = json.Unmarshal(contents, &fileRef)
+	if err != nil {
+		return nil, err
+	}
+
+	fileRawContent, err := base64.StdEncoding.DecodeString(fileRef.Content)
+	return fileRawContent, err
 }
 
 //
@@ -138,8 +144,9 @@ func (c *Client) SetStatus(id, sha, state, desc, ref, link string) error {
 // Get a list of projects by query owned by the authenticated user.
 func (c *Client) SearchProjectId(namespace string, name string) (id int, err error) {
 
-	url, opaque := c.ResourceUrl(searchUrl, nil, QMap{
-		":query": strings.ToLower(name),
+	url, opaque := c.ResourceUrl(projectsUrl, nil, QMap{
+		"query":      strings.ToLower(name),
+		"membership": "true",
 	})
 
 	var projects []*Project

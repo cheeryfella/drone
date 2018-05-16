@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package bitbucket
 
 import (
@@ -147,19 +161,30 @@ func Test_bitbucket(t *testing.T) {
 			g.It("Should authorize read access", func() {
 				perm, err := c.Perm(
 					fakeUser,
-					fakeRepoNoHooks.Owner,
-					fakeRepoNoHooks.Name,
+					fakeRepoReadOnly.Owner,
+					fakeRepoReadOnly.Name,
 				)
 				g.Assert(err == nil).IsTrue()
 				g.Assert(perm.Pull).IsTrue()
 				g.Assert(perm.Push).IsFalse()
 				g.Assert(perm.Admin).IsFalse()
 			})
+			g.It("Should authorize write access", func() {
+				perm, err := c.Perm(
+					fakeUser,
+					fakeRepoWriteOnly.Owner,
+					fakeRepoWriteOnly.Name,
+				)
+				g.Assert(err == nil).IsTrue()
+				g.Assert(perm.Pull).IsTrue()
+				g.Assert(perm.Push).IsTrue()
+				g.Assert(perm.Admin).IsFalse()
+			})
 			g.It("Should authorize admin access", func() {
 				perm, err := c.Perm(
 					fakeUser,
-					fakeRepo.Owner,
-					fakeRepo.Name,
+					fakeRepoAdmin.Owner,
+					fakeRepoAdmin.Name,
 				)
 				g.Assert(err == nil).IsTrue()
 				g.Assert(perm.Pull).IsTrue()
@@ -334,6 +359,24 @@ var (
 		Owner:    "test_name",
 		Name:     "hook_empty",
 		FullName: "test_name/hook_empty",
+	}
+
+	fakeRepoReadOnly = &model.Repo{
+		Owner:    "test_name",
+		Name:     "permission_read",
+		FullName: "test_name/permission_read",
+	}
+
+	fakeRepoWriteOnly = &model.Repo{
+		Owner:    "test_name",
+		Name:     "permission_write",
+		FullName: "test_name/permission_write",
+	}
+
+	fakeRepoAdmin = &model.Repo{
+		Owner:    "test_name",
+		Name:     "permission_admin",
+		FullName: "test_name/permission_admin",
 	}
 
 	fakeBuild = &model.Build{

@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package datastore
 
 import (
@@ -8,9 +22,8 @@ import (
 )
 
 func TestUsers(t *testing.T) {
-	db := openTest()
-	defer db.Close()
-	s := From(db)
+	s := newTest()
+	defer s.Close()
 
 	g := goblin.Goblin(t)
 	g.Describe("User", func() {
@@ -18,10 +31,10 @@ func TestUsers(t *testing.T) {
 		// before each test be sure to purge the package
 		// table data from the database.
 		g.BeforeEach(func() {
-			db.Exec("DELETE FROM users")
-			db.Exec("DELETE FROM repos")
-			db.Exec("DELETE FROM builds")
-			db.Exec("DELETE FROM jobs")
+			s.Exec("DELETE FROM users")
+			s.Exec("DELETE FROM repos")
+			s.Exec("DELETE FROM builds")
+			s.Exec("DELETE FROM procs")
 		})
 
 		g.It("Should Update a User", func() {
@@ -138,7 +151,11 @@ func TestUsers(t *testing.T) {
 			s.CreateUser(&user2)
 			count, err := s.GetUserCount()
 			g.Assert(err == nil).IsTrue()
-			g.Assert(count).Equal(2)
+			if s.driver != "postgres" {
+				// we have to skip this check for postgres because it uses
+				// an estimate which may not be updated.
+				g.Assert(count).Equal(2)
+			}
 		})
 
 		g.It("Should Get a User Count Zero", func() {
@@ -163,27 +180,39 @@ func TestUsers(t *testing.T) {
 		})
 
 		g.It("Should get the Build feed for a User", func() {
+			user := &model.User{
+				Login: "joe",
+				Email: "foo@bar.com",
+				Token: "e42080dddf012c718e476da161d21ad5",
+			}
+			s.CreateUser(user)
+
 			repo1 := &model.Repo{
-				UserID:   1,
 				Owner:    "bradrydzewski",
 				Name:     "drone",
 				FullName: "bradrydzewski/drone",
+				IsActive: true,
 			}
 			repo2 := &model.Repo{
-				UserID:   2,
 				Owner:    "drone",
 				Name:     "drone",
 				FullName: "drone/drone",
+				IsActive: true,
 			}
 			repo3 := &model.Repo{
-				UserID:   2,
 				Owner:    "octocat",
 				Name:     "hello-world",
 				FullName: "octocat/hello-world",
+				IsActive: true,
 			}
 			s.CreateRepo(repo1)
 			s.CreateRepo(repo2)
 			s.CreateRepo(repo3)
+
+			s.PermBatch([]*model.Perm{
+				{UserID: user.ID, Repo: repo1.FullName},
+				{UserID: user.ID, Repo: repo2.FullName},
+			})
 
 			build1 := &model.Build{
 				RepoID: repo1.ID,
@@ -206,10 +235,7 @@ func TestUsers(t *testing.T) {
 			s.CreateBuild(build3)
 			s.CreateBuild(build4)
 
-			builds, err := s.GetUserFeed([]*model.RepoLite{
-				{FullName: "bradrydzewski/drone"},
-				{FullName: "drone/drone"},
-			})
+			builds, err := s.UserFeed(user)
 			g.Assert(err == nil).IsTrue()
 			g.Assert(len(builds)).Equal(3)
 			g.Assert(builds[0].FullName).Equal(repo2.FullName)

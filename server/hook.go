@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package server
 
 import (
@@ -6,8 +20,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -84,6 +100,11 @@ func PostHook(c *gin.Context) {
 		c.AbortWithError(404, err)
 		return
 	}
+	if !repo.IsActive {
+		logrus.Errorf("ignoring hook. %s/%s is inactive.", tmprepo.Owner, tmprepo.Name)
+		c.AbortWithError(204, err)
+		return
+	}
 
 	// get the token and verify the hook is authorized
 	parsed, err := token.ParseRequest(c.Request, func(t *token.Token) (string, error) {
@@ -137,9 +158,9 @@ func PostHook(c *gin.Context) {
 	}
 
 	// fetch the build file from the database
-	confb, err := remote_.File(user, repo, build, repo.Config)
+	confb, err := remote.FileBackoff(remote_, user, repo, build, repo.Config)
 	if err != nil {
-		logrus.Errorf("failure to get build config for %s. %s", repo.FullName, err)
+		logrus.Errorf("error: %s: cannot find %s in %s: %s", repo.FullName, repo.Config, build.Ref, err)
 		c.AbortWithError(404, err)
 		return
 	}
@@ -153,9 +174,13 @@ func PostHook(c *gin.Context) {
 		}
 		err = Config.Storage.Config.ConfigCreate(conf)
 		if err != nil {
-			logrus.Errorf("failure to persist config for %s. %s", repo.FullName, err)
-			c.AbortWithError(500, err)
-			return
+			// retry in case we receive two hooks at the same time
+			conf, err = Config.Storage.Config.ConfigFind(repo, sha)
+			if err != nil {
+				logrus.Errorf("failure to find or persist build config for %s. %s", repo.FullName, err)
+				c.AbortWithError(500, err)
+				return
+			}
 		}
 	}
 	build.ConfigID = conf.ID
@@ -175,16 +200,6 @@ func PostHook(c *gin.Context) {
 		}
 	}
 
-	secs, err := Config.Services.Secrets.SecretList(repo)
-	if err != nil {
-		logrus.Debugf("Error getting secrets for %s#%d. %s", repo.FullName, build.Number, err)
-	}
-
-	regs, err := Config.Services.Registries.RegistryList(repo)
-	if err != nil {
-		logrus.Debugf("Error getting registry credentials for %s#%d. %s", repo.FullName, build.Number, err)
-	}
-
 	// update some build fields
 	build.RepoID = repo.ID
 	build.Verified = true
@@ -195,6 +210,11 @@ func PostHook(c *gin.Context) {
 		if !allowed {
 			build.Status = model.StatusBlocked
 		}
+	}
+
+	if err = Config.Services.Limiter.LimitBuild(user, repo, build); err != nil {
+		c.String(403, "Build blocked by limiter")
+		return
 	}
 
 	build.Trim()
@@ -211,6 +231,24 @@ func PostHook(c *gin.Context) {
 		return
 	}
 
+	envs := map[string]string{}
+	if Config.Services.Environ != nil {
+		globals, _ := Config.Services.Environ.EnvironList(repo)
+		for _, global := range globals {
+			envs[global.Name] = global.Value
+		}
+	}
+
+	secs, err := Config.Services.Secrets.SecretListBuild(repo, build)
+	if err != nil {
+		logrus.Debugf("Error getting secrets for %s#%d. %s", repo.FullName, build.Number, err)
+	}
+
+	regs, err := Config.Services.Registries.RegistryList(repo)
+	if err != nil {
+		logrus.Debugf("Error getting registry credentials for %s#%d. %s", repo.FullName, build.Number, err)
+	}
+
 	// get the previous build so that we can send
 	// on status change notifications
 	last, _ := store.GetBuildLastBefore(c, repo, build.Branch, build.ID)
@@ -223,7 +261,7 @@ func PostHook(c *gin.Context) {
 		uri := fmt.Sprintf("%s/%s/%d", httputil.GetURL(c.Request), repo.FullName, build.Number)
 		err = remote_.Status(user, repo, build, uri)
 		if err != nil {
-			logrus.Errorf("error setting commit status for %s/%d", repo.FullName, build.Number)
+			logrus.Errorf("error setting commit status for %s/%d: %v", repo.FullName, build.Number, err)
 		}
 	}()
 
@@ -234,6 +272,7 @@ func PostHook(c *gin.Context) {
 		Netrc: netrc,
 		Secs:  secs,
 		Regs:  regs,
+		Envs:  envs,
 		Link:  httputil.GetURL(c.Request),
 		Yaml:  conf.Data,
 	}
@@ -303,10 +342,11 @@ func PostHook(c *gin.Context) {
 		task := new(queue.Task)
 		task.ID = fmt.Sprint(item.Proc.ID)
 		task.Labels = map[string]string{}
-		task.Labels["platform"] = item.Platform
 		for k, v := range item.Labels {
 			task.Labels[k] = v
 		}
+		task.Labels["platform"] = item.Platform
+		task.Labels["repo"] = b.Repo.FullName
 
 		task.Data, _ = json.Marshal(rpc.Pipeline{
 			ID:      fmt.Sprint(item.Proc.ID),
@@ -321,12 +361,18 @@ func PostHook(c *gin.Context) {
 
 // return the metadata from the cli context.
 func metadataFromStruct(repo *model.Repo, build, last *model.Build, proc *model.Proc, link string) frontend.Metadata {
+	host := link
+	uri, err := url.Parse(link)
+	if err == nil {
+		host = uri.Host
+	}
 	return frontend.Metadata{
 		Repo: frontend.Repo{
 			Name:    repo.FullName,
 			Link:    repo.Link,
 			Remote:  repo.Clone,
 			Private: repo.IsPrivate,
+			Branch:  repo.Branch,
 		},
 		Curr: frontend.Build{
 			Number:   build.Number,
@@ -380,6 +426,7 @@ func metadataFromStruct(repo *model.Repo, build, last *model.Build, proc *model.
 		Sys: frontend.System{
 			Name: "drone",
 			Link: link,
+			Host: host,
 			Arch: "linux/amd64",
 		},
 	}
@@ -394,6 +441,7 @@ type builder struct {
 	Regs  []*model.Registry
 	Link  string
 	Yaml  string
+	Envs  map[string]string
 }
 
 type buildItem struct {
@@ -446,7 +494,11 @@ func (b *builder) Build() ([]*buildItem, error) {
 
 		y := b.Yaml
 		s, err := envsubst.Eval(y, func(name string) string {
-			return environ[name]
+			env := environ[name]
+			if strings.Contains(env, "\n") {
+				env = fmt.Sprintf("%q", env)
+			}
+			return env
 		})
 		if err != nil {
 			return nil, err
@@ -481,7 +533,9 @@ func (b *builder) Build() ([]*buildItem, error) {
 
 		ir := compiler.New(
 			compiler.WithEnviron(environ),
+			compiler.WithEnviron(b.Envs),
 			compiler.WithEscalated(Config.Pipeline.Privileged...),
+			compiler.WithResourceLimit(Config.Pipeline.Limits.MemSwapLimit, Config.Pipeline.Limits.MemLimit, Config.Pipeline.Limits.ShmSize, Config.Pipeline.Limits.CPUQuota, Config.Pipeline.Limits.CPUShares, Config.Pipeline.Limits.CPUSet),
 			compiler.WithVolumes(Config.Pipeline.Volumes...),
 			compiler.WithNetworks(Config.Pipeline.Networks...),
 			compiler.WithLocal(false),
@@ -504,7 +558,7 @@ func (b *builder) Build() ([]*buildItem, error) {
 			),
 			compiler.WithEnviron(proc.Environ),
 			compiler.WithProxy(),
-			compiler.WithWorkspaceFromURL("/drone", b.Curr.Link),
+			compiler.WithWorkspaceFromURL("/drone", b.Repo.Link),
 			compiler.WithMetadata(metadata),
 		).Compile(parsed)
 

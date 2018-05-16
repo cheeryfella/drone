@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package internal
 
 import (
@@ -20,15 +34,16 @@ const (
 )
 
 const (
-	pathUser   = "%s/2.0/user/"
-	pathEmails = "%s/2.0/user/emails"
-	pathTeams  = "%s/2.0/teams/?%s"
-	pathRepo   = "%s/2.0/repositories/%s/%s"
-	pathRepos  = "%s/2.0/repositories/%s?%s"
-	pathHook   = "%s/2.0/repositories/%s/%s/hooks/%s"
-	pathHooks  = "%s/2.0/repositories/%s/%s/hooks?%s"
-	pathSource = "%s/1.0/repositories/%s/%s/src/%s/%s"
-	pathStatus = "%s/2.0/repositories/%s/%s/commit/%s/statuses/build"
+	pathUser        = "%s/2.0/user/"
+	pathEmails      = "%s/2.0/user/emails"
+	pathPermissions = "%s/2.0/user/permissions/repositories?q=repository.full_name=%q"
+	pathTeams       = "%s/2.0/teams/?%s"
+	pathRepo        = "%s/2.0/repositories/%s/%s"
+	pathRepos       = "%s/2.0/repositories/%s?%s"
+	pathHook        = "%s/2.0/repositories/%s/%s/hooks/%s"
+	pathHooks       = "%s/2.0/repositories/%s/%s/hooks?%s"
+	pathSource      = "%s/1.0/repositories/%s/%s/src/%s/%s"
+	pathStatus      = "%s/2.0/repositories/%s/%s/commit/%s/statuses/build"
 )
 
 type Client struct {
@@ -136,6 +151,22 @@ func (c *Client) FindSource(owner, name, revision, path string) (*Source, error)
 func (c *Client) CreateStatus(owner, name, revision string, status *BuildStatus) error {
 	uri := fmt.Sprintf(pathStatus, c.base, owner, name, revision)
 	return c.do(uri, post, status, nil)
+}
+
+func (c *Client) GetPermission(fullName string) (*RepoPerm, error) {
+	out := new(RepoPermResp)
+	uri := fmt.Sprintf(pathPermissions, c.base, fullName)
+	err := c.do(uri, get, nil, out)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(out.Values) == 0 {
+		return nil, fmt.Errorf("no permissions in repository %s", fullName)
+	} else {
+		return out.Values[0], nil
+	}
 }
 
 func (c *Client) do(rawurl, method string, in, out interface{}) error {

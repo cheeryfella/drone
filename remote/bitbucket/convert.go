@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package bitbucket
 
 import (
@@ -108,17 +122,6 @@ func cloneLink(repo *internal.Repo) string {
 	}
 
 	return clone
-}
-
-// convertRepoLite is a helper function used to convert a Bitbucket repository
-// structure to the simplified Drone repository structure.
-func convertRepoLite(from *internal.Repo) *model.RepoLite {
-	return &model.RepoLite{
-		Owner:    strings.Split(from.FullName, "/")[0],
-		Name:     strings.Split(from.FullName, "/")[1],
-		FullName: from.FullName,
-		Avatar:   from.Owner.Links.Avatar.Href,
-	}
 }
 
 // convertUser is a helper function used to convert a Bitbucket user account

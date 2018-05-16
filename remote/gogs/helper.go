@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gogs
 
 import (
@@ -13,27 +27,16 @@ import (
 )
 
 // helper function that converts a Gogs repository to a Drone repository.
-func toRepoLite(from *gogs.Repository) *model.RepoLite {
+func toRepo(from *gogs.Repository, privateMode bool) *model.Repo {
 	name := strings.Split(from.FullName, "/")[1]
 	avatar := expandAvatar(
 		from.HtmlUrl,
 		from.Owner.AvatarUrl,
 	)
-	return &model.RepoLite{
-		Name:     name,
-		Owner:    from.Owner.UserName,
-		FullName: from.FullName,
-		Avatar:   avatar,
+	private := from.Private
+	if privateMode {
+		private = true
 	}
-}
-
-// helper function that converts a Gogs repository to a Drone repository.
-func toRepo(from *gogs.Repository) *model.Repo {
-	name := strings.Split(from.FullName, "/")[1]
-	avatar := expandAvatar(
-		from.HtmlUrl,
-		from.Owner.AvatarUrl,
-	)
 	return &model.Repo{
 		Kind:      model.RepoGit,
 		Name:      name,
@@ -41,7 +44,7 @@ func toRepo(from *gogs.Repository) *model.Repo {
 		FullName:  from.FullName,
 		Avatar:    avatar,
 		Link:      from.HtmlUrl,
-		IsPrivate: from.Private,
+		IsPrivate: private,
 		Clone:     from.CloneUrl,
 		Branch:    "master",
 	}
@@ -88,6 +91,7 @@ func buildFromPush(hook *pushHook) *model.Build {
 		Message:   hook.Commits[0].Message,
 		Avatar:    avatar,
 		Author:    author,
+		Email:     hook.Sender.Email,
 		Timestamp: time.Now().UTC().Unix(),
 		Sender:    sender,
 	}

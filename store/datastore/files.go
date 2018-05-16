@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package datastore
 
 import (
@@ -42,10 +56,14 @@ func (db *datastore) FileCreate(file *model.File, r io.Reader) error {
 		ID:      file.ID,
 		BuildID: file.BuildID,
 		ProcID:  file.ProcID,
+		PID:     file.PID,
 		Name:    file.Name,
 		Size:    file.Size,
 		Mime:    file.Mime,
 		Time:    file.Time,
+		Passed:  file.Passed,
+		Failed:  file.Failed,
+		Skipped: file.Skipped,
 		Data:    d,
 	}
 	return meddler.Insert(db, "files", &f)
@@ -55,9 +73,13 @@ type fileData struct {
 	ID      int64  `meddler:"file_id,pk"`
 	BuildID int64  `meddler:"file_build_id"`
 	ProcID  int64  `meddler:"file_proc_id"`
+	PID     int    `meddler:"file_pid"`
 	Name    string `meddler:"file_name"`
 	Size    int    `meddler:"file_size"`
 	Mime    string `meddler:"file_mime"`
 	Time    int64  `meddler:"file_time"`
+	Passed  int    `meddler:"file_meta_passed"`
+	Failed  int    `meddler:"file_meta_failed"`
+	Skipped int    `meddler:"file_meta_skipped"`
 	Data    []byte `meddler:"file_data"`
 }

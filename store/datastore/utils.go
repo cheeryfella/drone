@@ -1,10 +1,22 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package datastore
 
 import (
 	"strconv"
-	"strings"
 
-	"github.com/drone/drone/model"
 	"github.com/russross/meddler"
 )
 
@@ -34,42 +46,4 @@ func rebind(query string) string {
 		}
 	}
 	return string(rqb)
-}
-
-// helper function that converts a simple repsitory list
-// to a sql IN statment.
-func toList(listof []*model.RepoLite) (string, []interface{}) {
-	var size = len(listof)
-	switch {
-	case meddler.Default == meddler.SQLite && size > 999:
-		size = 999
-		listof = listof[:999]
-	case size > 15000:
-		size = 15000
-		listof = listof[:15000]
-	}
-	var qs = make([]string, size, size)
-	var in = make([]interface{}, size, size)
-	for i, repo := range listof {
-		qs[i] = "?"
-		in[i] = repo.FullName
-	}
-	return strings.Join(qs, ","), in
-}
-
-// helper function that converts a simple repository list
-// to a sql IN statement compatible with postgres.
-func toListPostgres(listof []*model.RepoLite) (string, []interface{}) {
-	var size = len(listof)
-	if size > 15000 {
-		size = 15000
-		listof = listof[:15000]
-	}
-	var qs = make([]string, size, size)
-	var in = make([]interface{}, size, size)
-	for i, repo := range listof {
-		qs[i] = "$" + strconv.Itoa(i+1)
-		in[i] = repo.FullName
-	}
-	return strings.Join(qs, ","), in
 }

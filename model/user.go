@@ -1,4 +1,28 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package model
+
+import (
+	"errors"
+	"regexp"
+)
+
+// validate a username (e.g. from github)
+var reUsername = regexp.MustCompile("^[a-zA-Z0-9-_.]+$")
+
+var errUserLoginInvalid = errors.New("Invalid User Login")
 
 // User represents a registered user.
 //
@@ -20,7 +44,7 @@ type User struct {
 	// Secret is the oauth2 token secret.
 	Secret string `json:"-" meddler:"user_secret"`
 
-	// Expiry is the token and secret expriation timestamp.
+	// Expiry is the token and secret expiration timestamp.
 	Expiry int64 `json:"-" meddler:"user_expiry"`
 
 	// Email is the email address for this user.
@@ -34,6 +58,9 @@ type User struct {
 	// Activate indicates the user is active in the system.
 	Active bool `json:"active" meddler:"user_active"`
 
+	// Synced is the timestamp when the user was synced with the remote system.
+	Synced int64 `json:"synced" meddler:"user_synced"`
+
 	// Admin indicates the user is a system administrator.
 	//
 	// NOTE: This is sourced from the DRONE_ADMINS environment variable and is no
@@ -45,4 +72,18 @@ type User struct {
 
 	// DEPRECATED Admin indicates the user is a system administrator.
 	XAdmin bool `json:"-" meddler:"user_admin"`
+}
+
+// Validate validates the required fields and formats.
+func (u *User) Validate() error {
+	switch {
+	case len(u.Login) == 0:
+		return errUserLoginInvalid
+	case len(u.Login) > 250:
+		return errUserLoginInvalid
+	case !reUsername.MatchString(u.Login):
+		return errUserLoginInvalid
+	default:
+		return nil
+	}
 }

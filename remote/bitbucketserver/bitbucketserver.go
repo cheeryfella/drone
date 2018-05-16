@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package bitbucketserver
 
 // WARNING! This is an work-in-progress patch and does not yet conform to the coding,
@@ -140,14 +154,14 @@ func (c *Config) Repo(u *model.User, owner, name string) (*model.Repo, error) {
 	return convertRepo(repo), nil
 }
 
-func (c *Config) Repos(u *model.User) ([]*model.RepoLite, error) {
+func (c *Config) Repos(u *model.User) ([]*model.Repo, error) {
 	repos, err := internal.NewClientWithToken(c.URL, c.Consumer, u.Token).FindRepos()
 	if err != nil {
 		return nil, err
 	}
-	var all []*model.RepoLite
+	var all []*model.Repo
 	for _, repo := range repos {
-		all = append(all, convertRepoLite(repo))
+		all = append(all, convertRepo(repo))
 	}
 
 	return all, nil
@@ -233,6 +247,7 @@ func CreateConsumer(URL string, ConsumerKey string, PrivateKey *rsa.PrivateKey) 
 	consumer.HttpClient = &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			Proxy:           http.ProxyFromEnvironment,
 		},
 	}
 	return consumer

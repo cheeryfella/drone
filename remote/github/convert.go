@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package github
 
 import (
@@ -80,6 +94,7 @@ func convertRepo(from *github.Repository, private bool) *model.Repo {
 		Avatar:    *from.Owner.AvatarURL,
 		Kind:      model.RepoGit,
 		Branch:    defaultBranch,
+		Perm:      convertPerm(from),
 	}
 	if from.DefaultBranch != nil {
 		repo.Branch = *from.DefaultBranch
@@ -114,24 +129,24 @@ func convertTeamPerm(from *github.Membership) *model.Perm {
 
 // convertRepoList is a helper function used to convert a GitHub repository
 // list to the common Drone repository structure.
-func convertRepoList(from []github.Repository) []*model.RepoLite {
-	var repos []*model.RepoLite
+func convertRepoList(from []github.Repository, private bool) []*model.Repo {
+	var repos []*model.Repo
 	for _, repo := range from {
-		repos = append(repos, convertRepoLite(repo))
+		repos = append(repos, convertRepo(&repo, private))
 	}
 	return repos
 }
 
-// convertRepoLite is a helper function used to convert a GitHub repository
-// structure to the common Drone repository structure.
-func convertRepoLite(from github.Repository) *model.RepoLite {
-	return &model.RepoLite{
-		Owner:    *from.Owner.Login,
-		Name:     *from.Name,
-		FullName: *from.FullName,
-		Avatar:   *from.Owner.AvatarURL,
-	}
-}
+// // convertRepoLite is a helper function used to convert a GitHub repository
+// // structure to the common Drone repository structure.
+// func convertRepoLite(from github.Repository) *model.RepoLite {
+// 	return &model.RepoLite{
+// 		Owner:    *from.Owner.Login,
+// 		Name:     *from.Name,
+// 		FullName: *from.FullName,
+// 		Avatar:   *from.Owner.AvatarURL,
+// 	}
+// }
 
 // convertTeamList is a helper function used to convert a GitHub team list to
 // the common Drone repository structure.
@@ -203,6 +218,11 @@ func convertPushHook(from *webhook) *model.Build {
 		// just kidding, this is actually a tag event. Why did this come as a push
 		// event we'll never know!
 		build.Event = model.EventTag
+		// For tags, if the base_ref (tag's base branch) is set, we're using it
+		// as build's branch so that we can filter events base on it
+		if strings.HasPrefix(from.BaseRef, "refs/heads/") {
+			build.Branch = strings.Replace(from.BaseRef, "refs/heads/", "", -1)
+		}
 	}
 	return build
 }

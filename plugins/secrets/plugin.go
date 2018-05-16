@@ -1,53 +1,48 @@
+// Copyright 2018 Drone.IO Inc
+// Use of this software is governed by the Drone Enterpise License
+// that can be found in the LICENSE file.
+
 package secrets
 
 import (
-	"fmt"
-
 	"github.com/drone/drone/model"
-	"github.com/drone/drone/plugins/internal"
+	"github.com/drone/drone/store"
 )
 
-type plugin struct {
-	endpoint string
+// NewDefault returns the Store wrapped as a Service.
+func NewDefault(store store.Store) model.SecretService {
+	return New(store)
 }
 
-// NewRemote returns a new remote secret service.
-func NewRemote(endpoint string) model.SecretService {
-	return &plugin{endpoint}
+// Plugin defines the required interface for implementing a remote
+// secret plugin and sourcing secrets from an external source.
+type Plugin interface {
+	SecretListBuild(*model.Repo, *model.Build) ([]*model.Secret, error)
 }
 
-func (p *plugin) SecretFind(repo *model.Repo, name string) (*model.Secret, error) {
-	path := fmt.Sprintf("%s/secrets/%s/%s/%s", p.endpoint, repo.Owner, repo.Name, name)
-	out := new(model.Secret)
-	err := internal.Send("GET", path, nil, out)
-	return out, err
+// Extend exetends the base secret service with the plugin.
+func Extend(base model.SecretService, with Plugin) model.SecretService {
+	return &extender{base, with}
 }
 
-func (p *plugin) SecretList(repo *model.Repo) ([]*model.Secret, error) {
-	path := fmt.Sprintf("%s/secrets/%s/%s", p.endpoint, repo.Owner, repo.Name)
-	out := []*model.Secret{}
-	err := internal.Send("GET", path, nil, out)
-	return out, err
+type extender struct {
+	model.SecretService
+	plugin Plugin
 }
 
-func (p *plugin) SecretListBuild(repo *model.Repo, build *model.Build) ([]*model.Secret, error) {
-	path := fmt.Sprintf("%s/secrets/%s/%s/%d", p.endpoint, repo.Owner, repo.Name, build.Number)
-	out := []*model.Secret{}
-	err := internal.Send("GET", path, nil, out)
-	return out, err
-}
-
-func (p *plugin) SecretCreate(repo *model.Repo, in *model.Secret) error {
-	path := fmt.Sprintf("%s/secrets/%s/%s", p.endpoint, repo.Owner, repo.Name)
-	return internal.Send("POST", path, in, nil)
-}
-
-func (p *plugin) SecretUpdate(repo *model.Repo, in *model.Secret) error {
-	path := fmt.Sprintf("%s/secrets/%s/%s/%s", p.endpoint, repo.Owner, repo.Name, in.Name)
-	return internal.Send("PATCH", path, in, nil)
-}
-
-func (p *plugin) SecretDelete(repo *model.Repo, name string) error {
-	path := fmt.Sprintf("%s/secrets/%s/%s/%s", p.endpoint, repo.Owner, repo.Name, name)
-	return internal.Send("DELETE", path, nil, nil)
+// extends the base secret service and combines the secret list with the
+// secret list returned by the plugin.
+func (e *extender) SecretListBuild(repo *model.Repo, build *model.Build) ([]*model.Secret, error) {
+	base, err := e.SecretService.SecretListBuild(repo, build)
+	if err != nil {
+		return nil, err
+	}
+	with, err := e.plugin.SecretListBuild(repo, build)
+	if err != nil {
+		return nil, err
+	}
+	for _, secret := range base {
+		with = append(with, secret)
+	}
+	return with, nil
 }

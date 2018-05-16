@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package server
 
 import (
@@ -16,7 +30,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func GetLogin(c *gin.Context) {
+func HandleLogin(c *gin.Context) {
+	var (
+		w = c.Writer
+		r = c.Request
+	)
+	if err := r.FormValue("error"); err != "" {
+		http.Redirect(w, r, "/login/error?code="+err, 303)
+	} else {
+		http.Redirect(w, r, "/authorize", 303)
+	}
+}
+
+func HandleAuth(c *gin.Context) {
 
 	// when dealing with redirects we may need to adjust the content type. I
 	// cannot, however, remember why, so need to revisit this line.
@@ -69,6 +95,11 @@ func GetLogin(c *gin.Context) {
 			),
 		}
 
+		if err = Config.Services.Limiter.LimitUser(u); err != nil {
+			c.String(403, "User activation blocked by limiter")
+			return
+		}
+
 		// insert the user into the database
 		if err := store.CreateUser(c, u); err != nil {
 			logrus.Errorf("cannot insert %s. %s", u.Login, err)
@@ -100,7 +131,7 @@ func GetLogin(c *gin.Context) {
 		return
 	}
 
-	exp := time.Now().Add(time.Hour * 72).Unix()
+	exp := time.Now().Add(Config.Server.SessionExpires).Unix()
 	token := token.New(token.SessToken, u.Login)
 	tokenstr, err := token.SignExpires(u.Hash, exp)
 	if err != nil {
@@ -140,7 +171,7 @@ func GetLoginToken(c *gin.Context) {
 		return
 	}
 
-	exp := time.Now().Add(time.Hour * 72).Unix()
+	exp := time.Now().Add(Config.Server.SessionExpires).Unix()
 	token := token.New(token.SessToken, user.Login)
 	tokenstr, err := token.SignExpires(user.Hash, exp)
 	if err != nil {

@@ -1,9 +1,23 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package router
 
 import (
 	"net/http"
-	"os"
 
+	"github.com/dimfeld/httptreemux"
 	"github.com/gin-gonic/gin"
 
 	"github.com/drone/drone/router/middleware/header"
@@ -12,26 +26,14 @@ import (
 	"github.com/drone/drone/server"
 	"github.com/drone/drone/server/debug"
 	"github.com/drone/drone/server/metrics"
-	"github.com/drone/drone/server/template"
-
-	"github.com/drone/drone-ui/dist"
+	"github.com/drone/drone/server/web"
 )
 
 // Load loads the router
-func Load(middleware ...gin.HandlerFunc) http.Handler {
+func Load(mux *httptreemux.ContextMux, middleware ...gin.HandlerFunc) http.Handler {
 
 	e := gin.New()
 	e.Use(gin.Recovery())
-	e.SetHTMLTemplate(template.T)
-
-	if dir := os.Getenv("DRONE_STATIC_DIR"); dir == "" {
-		fs := http.FileServer(dist.AssetFS())
-		e.GET("/static/*filepath", func(c *gin.Context) {
-			fs.ServeHTTP(c.Writer, c.Request)
-		})
-	} else {
-		e.Static("/static", dir)
-	}
 
 	e.Use(header.NoCache)
 	e.Use(header.Options)
@@ -40,10 +42,18 @@ func Load(middleware ...gin.HandlerFunc) http.Handler {
 	e.Use(session.SetUser())
 	e.Use(token.Refresh)
 
-	e.GET("/login", server.ShowLogin)
-	e.GET("/login/form", server.ShowLoginForm)
+	e.NoRoute(func(c *gin.Context) {
+		req := c.Request.WithContext(
+			web.WithUser(
+				c.Request.Context(),
+				session.User(c),
+			),
+		)
+		mux.ServeHTTP(c.Writer, req)
+	})
+
 	e.GET("/logout", server.GetLogout)
-	e.NoRoute(server.ShowIndex)
+	e.GET("/login", server.HandleLogin)
 
 	user := e.Group("/api/user")
 	{
@@ -51,7 +61,6 @@ func Load(middleware ...gin.HandlerFunc) http.Handler {
 		user.GET("", server.GetSelf)
 		user.GET("/feed", server.GetFeed)
 		user.GET("/repos", server.GetRepos)
-		user.GET("/repos/remote", server.GetRemoteRepos)
 		user.POST("/token", server.PostToken)
 		user.DELETE("/token", server.DeleteToken)
 	}
@@ -66,47 +75,49 @@ func Load(middleware ...gin.HandlerFunc) http.Handler {
 		users.DELETE("/:login", server.DeleteUser)
 	}
 
-	repos := e.Group("/api/repos/:owner/:name")
+	repo := e.Group("/api/repos/:owner/:name")
 	{
-		repos.POST("", server.PostRepo)
+		repo.Use(session.SetRepo())
+		repo.Use(session.SetPerm())
+		repo.Use(session.MustPull)
 
-		repo := repos.Group("")
-		{
-			repo.Use(session.SetRepo())
-			repo.Use(session.SetPerm())
-			repo.Use(session.MustPull)
+		repo.POST("", session.MustRepoAdmin(), server.PostRepo)
+		repo.GET("", server.GetRepo)
+		repo.GET("/builds", server.GetBuilds)
+		repo.GET("/builds/:number", server.GetBuild)
+		repo.GET("/logs/:number/:pid", server.GetProcLogs)
+		repo.GET("/logs/:number/:pid/:proc", server.GetBuildLogs)
 
-			repo.GET("", server.GetRepo)
-			repo.GET("/builds", server.GetBuilds)
-			repo.GET("/builds/:number", server.GetBuild)
-			repo.GET("/logs/:number/:ppid/:proc", server.GetBuildLogs)
-			repo.POST("/sign", session.MustPush, server.Sign)
+		repo.GET("/files/:number", server.FileList)
+		repo.GET("/files/:number/:proc/*file", server.FileGet)
 
-			// requires push permissions
-			repo.GET("/secrets", session.MustPush, server.GetSecretList)
-			repo.POST("/secrets", session.MustPush, server.PostSecret)
-			repo.GET("/secrets/:secret", session.MustPush, server.GetSecret)
-			repo.PATCH("/secrets/:secret", session.MustPush, server.PatchSecret)
-			repo.DELETE("/secrets/:secret", session.MustPush, server.DeleteSecret)
+		// requires push permissions
+		repo.GET("/secrets", session.MustPush, server.GetSecretList)
+		repo.POST("/secrets", session.MustPush, server.PostSecret)
+		repo.GET("/secrets/:secret", session.MustPush, server.GetSecret)
+		repo.PATCH("/secrets/:secret", session.MustPush, server.PatchSecret)
+		repo.DELETE("/secrets/:secret", session.MustPush, server.DeleteSecret)
 
-			// requires push permissions
-			repo.GET("/registry", session.MustPush, server.GetRegistryList)
-			repo.POST("/registry", session.MustPush, server.PostRegistry)
-			repo.GET("/registry/:registry", session.MustPush, server.GetRegistry)
-			repo.PATCH("/registry/:registry", session.MustPush, server.PatchRegistry)
-			repo.DELETE("/registry/:registry", session.MustPush, server.DeleteRegistry)
+		// requires push permissions
+		repo.GET("/registry", session.MustPush, server.GetRegistryList)
+		repo.POST("/registry", session.MustPush, server.PostRegistry)
+		repo.GET("/registry/:registry", session.MustPush, server.GetRegistry)
+		repo.PATCH("/registry/:registry", session.MustPush, server.PatchRegistry)
+		repo.DELETE("/registry/:registry", session.MustPush, server.DeleteRegistry)
 
-			// requires push permissions
-			repo.PATCH("", session.MustPush, server.PatchRepo)
-			repo.DELETE("", session.MustRepoAdmin(), server.DeleteRepo)
-			repo.POST("/chown", session.MustRepoAdmin(), server.ChownRepo)
-			repo.POST("/repair", session.MustRepoAdmin(), server.RepairRepo)
+		// requires admin permissions
+		repo.PATCH("", session.MustRepoAdmin(), server.PatchRepo)
+		repo.DELETE("", session.MustRepoAdmin(), server.DeleteRepo)
+		repo.POST("/chown", session.MustRepoAdmin(), server.ChownRepo)
+		repo.POST("/repair", session.MustRepoAdmin(), server.RepairRepo)
+		repo.POST("/move", session.MustRepoAdmin(), server.MoveRepo)
 
-			repo.POST("/builds/:number", session.MustPush, server.PostBuild)
-			repo.POST("/builds/:number/approve", session.MustPush, server.PostApproval)
-			repo.POST("/builds/:number/decline", session.MustPush, server.PostDecline)
-			repo.DELETE("/builds/:number/:job", session.MustPush, server.DeleteBuild)
-		}
+		repo.POST("/builds/:number", session.MustPush, server.PostBuild)
+		repo.DELETE("/builds/:number", session.MustRepoAdmin(), server.ZombieKill)
+		repo.POST("/builds/:number/approve", session.MustPush, server.PostApproval)
+		repo.POST("/builds/:number/decline", session.MustPush, server.PostDecline)
+		repo.DELETE("/builds/:number/:job", session.MustPush, server.DeleteBuild)
+		repo.DELETE("/logs/:number", session.MustPush, server.DeleteBuildLogs)
 	}
 
 	badges := e.Group("/api/badges/:owner/:name")
@@ -118,16 +129,14 @@ func Load(middleware ...gin.HandlerFunc) http.Handler {
 	e.POST("/hook", server.PostHook)
 	e.POST("/api/hook", server.PostHook)
 
-	ws := e.Group("/ws")
+	sse := e.Group("/stream")
 	{
-		ws.GET("/broker", server.RPCHandler)
-		ws.GET("/rpc", server.RPCHandler)
-		ws.GET("/feed", server.EventStream)
-		ws.GET("/logs/:owner/:name/:build/:number",
+		sse.GET("/events", server.EventStreamSSE)
+		sse.GET("/logs/:owner/:name/:build/:number",
 			session.SetRepo(),
 			session.SetPerm(),
 			session.MustPull,
-			server.LogStream,
+			server.LogStreamSSE,
 		)
 	}
 
@@ -141,8 +150,8 @@ func Load(middleware ...gin.HandlerFunc) http.Handler {
 
 	auth := e.Group("/authorize")
 	{
-		auth.GET("", server.GetLogin)
-		auth.POST("", server.GetLogin)
+		auth.GET("", server.HandleAuth)
+		auth.POST("", server.HandleAuth)
 		auth.POST("/token", server.GetLoginToken)
 	}
 
@@ -169,18 +178,11 @@ func Load(middleware ...gin.HandlerFunc) http.Handler {
 
 	monitor := e.Group("/metrics")
 	{
-		monitor.GET("",
-			session.MustAdmin(),
-			metrics.PromHandler(),
-		)
+		monitor.GET("", metrics.PromHandler())
 	}
+
+	e.GET("/version", server.Version)
+	e.GET("/healthz", server.Health)
 
 	return e
 }
-
-// type FileHandler interface {
-// 	Index(res http.ResponseWriter, data interface{}) error
-// 	Login(res http.ResponseWriter, data interface{}) error
-// 	Error(res http.ResponseWriter, data interface{}) error
-// 	Asset(res http.ResponseWriter, req *http.Request)
-// }

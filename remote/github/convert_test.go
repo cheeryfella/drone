@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package github
 
 import (
@@ -50,36 +64,27 @@ func Test_helper(t *testing.T) {
 			g.Assert(convertDesc(model.StatusError)).Equal(descError)
 		})
 
-		g.It("should convert repository lite", func() {
-			from := github.Repository{
-				FullName: github.String("octocat/hello-world"),
-				Name:     github.String("hello-world"),
-				Owner: &github.User{
-					AvatarURL: github.String("http://..."),
-					Login:     github.String("octocat"),
-				},
-			}
-
-			to := convertRepoLite(from)
-			g.Assert(to.Avatar).Equal("http://...")
-			g.Assert(to.FullName).Equal("octocat/hello-world")
-			g.Assert(to.Owner).Equal("octocat")
-			g.Assert(to.Name).Equal("hello-world")
-		})
-
 		g.It("should convert repository list", func() {
 			from := []github.Repository{
 				{
+					Private:  github.Bool(false),
 					FullName: github.String("octocat/hello-world"),
 					Name:     github.String("hello-world"),
 					Owner: &github.User{
 						AvatarURL: github.String("http://..."),
 						Login:     github.String("octocat"),
 					},
+					HTMLURL:  github.String("https://github.com/octocat/hello-world"),
+					CloneURL: github.String("https://github.com/octocat/hello-world.git"),
+					Permissions: &map[string]bool{
+						"push":  true,
+						"pull":  true,
+						"admin": true,
+					},
 				},
 			}
 
-			to := convertRepoList(from)
+			to := convertRepoList(from, false)
 			g.Assert(to[0].Avatar).Equal("http://...")
 			g.Assert(to[0].FullName).Equal("octocat/hello-world")
 			g.Assert(to[0].Owner).Equal("octocat")
@@ -97,6 +102,11 @@ func Test_helper(t *testing.T) {
 				Owner: &github.User{
 					AvatarURL: github.String("http://..."),
 					Login:     github.String("octocat"),
+				},
+				Permissions: &map[string]bool{
+					"push":  true,
+					"pull":  true,
+					"admin": true,
 				},
 			}
 
@@ -250,6 +260,26 @@ func Test_helper(t *testing.T) {
 			build := convertPushHook(from)
 			g.Assert(build.Event).Equal(model.EventTag)
 			g.Assert(build.Ref).Equal("refs/tags/v1.0.0")
+		})
+
+		g.It("should convert tag's base branch from webhook to build's branch ", func() {
+			from := &webhook{}
+			from.Ref = "refs/tags/v1.0.0"
+			from.BaseRef = "refs/heads/master"
+
+			build := convertPushHook(from)
+			g.Assert(build.Event).Equal(model.EventTag)
+			g.Assert(build.Branch).Equal("master")
+		})
+
+		g.It("should not convert tag's base_ref from webhook if not prefixed with 'ref/heads/'", func() {
+			from := &webhook{}
+			from.Ref = "refs/tags/v1.0.0"
+			from.BaseRef = "refs/refs/master"
+
+			build := convertPushHook(from)
+			g.Assert(build.Event).Equal(model.EventTag)
+			g.Assert(build.Branch).Equal("refs/tags/v1.0.0")
 		})
 	})
 }

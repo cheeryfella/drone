@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package client
 
 type QMap map[string]string
@@ -135,4 +149,16 @@ type HookPayload struct {
 	TotalCommitsCount int          `json:"total_commits_count,omitempty"`
 	ObjectKind        string       `json:"object_kind,omitempty"`
 	ObjectAttributes  *HookObjAttr `json:"object_attributes,omitempty"`
+}
+
+type FileRef struct {
+	FileName     string `json:"file_name,omitempty"`
+	FilePath     string `json:"file_path,omitempty"`
+	Size         int    `json:"size,omitempty"`
+	Encoding     string `json:"encoding,omitempty"`
+	Content      string `json:"content"`
+	Ref          string `json:"ref,omitempty"`
+	BlobId       string `json:"blob_id,omitempty"`
+	CommitId     string `json:"commit_id,omitempty"`
+	LastCommitId string `json:"last_commit_id,omitempty"`
 }

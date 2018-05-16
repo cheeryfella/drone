@@ -8,6 +8,10 @@ pipeline:
     commands:
       - go get -u github.com/drone/drone-ui/dist
       - go get -u golang.org/x/tools/cmd/cover
+      - go get -u golang.org/x/net/context
+      - go get -u golang.org/x/net/context/ctxhttp
+      - go get -u github.com/golang/protobuf/proto
+      - go get -u github.com/golang/protobuf/protoc-gen-go
       - go test -cover $(go list ./... | grep -v /vendor/)
 
   test_postgres:
@@ -28,25 +32,22 @@ pipeline:
 
   build:
     image: golang:1.8
-    commands:
-      - ./ci.sh
-      - ./dist.sh
+    commands: sh .drone.sh
     secrets: [ ssh_key ]
     when:
       event: [ push, tag ]
 
-  archive:
-    image: plugins/s3
-    acl: public-read
-    bucket: downloads.drone.io
-    source: release/**/*.*
-    target: /0.6.0/
-    secrets: [ aws_access_key_id, aws_secret_access_key ]
+  publish_server_alpine:
+    image: plugins/docker
+    repo: drone/drone
+    dockerfile: Dockerfile.alpine
+    secrets: [ docker_username, docker_password ]
+    tag: [ alpine ]
     when:
-      event: push
       branch: master
+      event: push
 
-  publish:
+  publish_server:
     image: plugins/docker
     repo: drone/drone
     secrets: [ docker_username, docker_password ]
@@ -55,19 +56,80 @@ pipeline:
       branch: master
       event: push
 
-  release:
+  publish_agent_alpine:
+    image: plugins/docker
+    repo: drone/agent
+    dockerfile: Dockerfile.agent.alpine
+    secrets: [ docker_username, docker_password ]
+    tag: [ alpine ]
+    when:
+      branch: master
+      event: push
+
+  publish_agent_arm:
+    image: plugins/docker
+    repo: drone/agent
+    dockerfile: Dockerfile.agent.linux.arm
+    secrets: [ docker_username, docker_password ]
+    tag: [ linux-arm ]
+    when:
+      branch: master
+      event: push
+
+  publish_agent_arm64:
+    image: plugins/docker
+    repo: drone/agent
+    dockerfile: Dockerfile.agent.linux.arm64
+    secrets: [ docker_username, docker_password ]
+    tag: [ linux-arm64 ]
+    when:
+      branch: master
+      event: push
+
+  publish_agent_amd64:
+    image: plugins/docker
+    repo: drone/agent
+    dockerfile: Dockerfile.agent
+    secrets: [ docker_username, docker_password ]
+    tag: [ latest ]
+    when:
+      branch: master
+      event: push
+
+  release_server_alpine:
     image: plugins/docker
     repo: drone/drone
+    dockerfile: Dockerfile.alpine
     secrets: [ docker_username, docker_password ]
-    tag: [ 0.6, 0.6.0 ]
+    tag: [ 0.8-alpine ]
     when:
       event: tag
 
-  notify:
-    image: plugins/gitter
-    secrets: [ gitter_webhook ]
+  release_agent_alpine:
+    image: plugins/docker
+    repo: drone/agent
+    dockerfile: Dockerfile.agent.alpine
+    secrets: [ docker_username, docker_password ]
+    tag: [ 0.8-alpine ]
     when:
-      status: [ success, failure ]
+      event: tag
+
+  release_server:
+    image: plugins/docker
+    repo: drone/drone
+    secrets: [ docker_username, docker_password ]
+    tag: [ 0.8, 0.8.5 ]
+    when:
+      event: tag
+
+  release_agent:
+    image: plugins/docker
+    repo: drone/agent
+    dockerfile: Dockerfile.agent
+    secrets: [ docker_username, docker_password ]
+    tag: [ 0.8, 0.8.5 ]
+    when:
+      event: tag
 
 services:
   postgres:

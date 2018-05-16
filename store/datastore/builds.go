@@ -1,9 +1,25 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package datastore
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/drone/drone/model"
+	"github.com/drone/drone/store/datastore/sql"
 	"github.com/russross/meddler"
 )
 
@@ -43,9 +59,9 @@ func (db *datastore) GetBuildLastBefore(repo *model.Repo, branch string, num int
 	return build, err
 }
 
-func (db *datastore) GetBuildList(repo *model.Repo) ([]*model.Build, error) {
+func (db *datastore) GetBuildList(repo *model.Repo, page int) ([]*model.Build, error) {
 	var builds = []*model.Build{}
-	var err = meddler.QueryAll(db, &builds, rebind(buildListQuery), repo.ID)
+	var err = meddler.QueryAll(db, &builds, rebind(buildListQuery), repo.ID, 50*(page-1))
 	return builds, err
 }
 
@@ -56,12 +72,14 @@ func (db *datastore) GetBuildQueue() ([]*model.Feed, error) {
 }
 
 func (db *datastore) CreateBuild(build *model.Build, procs ...*model.Proc) error {
-	var number int
-	db.QueryRow(rebind(buildNumberLast), build.RepoID).Scan(&number)
-	build.Number = number + 1
+	id, err := db.incrementRepoRetry(build.RepoID)
+	if err != nil {
+		return err
+	}
+	build.Number = id
 	build.Created = time.Now().UTC().Unix()
 	build.Enqueued = build.Created
-	err := meddler.Insert(db, buildTable, build)
+	err = meddler.Insert(db, buildTable, build)
 	if err != nil {
 		return err
 	}
@@ -75,8 +93,48 @@ func (db *datastore) CreateBuild(build *model.Build, procs ...*model.Proc) error
 	return nil
 }
 
+func (db *datastore) incrementRepoRetry(id int64) (int, error) {
+	repo, err := db.GetRepo(id)
+	if err != nil {
+		return 0, fmt.Errorf("database: cannot fetch repository: %s", err)
+	}
+	for i := 0; i < 10; i++ {
+		seq, err := db.incrementRepo(repo.ID, repo.Counter+i, repo.Counter+i+1)
+		if err != nil {
+			return 0, err
+		}
+		if seq == 0 {
+			continue
+		}
+		return seq, nil
+	}
+	return 0, fmt.Errorf("cannot increment next build number")
+}
+
+func (db *datastore) incrementRepo(id int64, old, new int) (int, error) {
+	results, err := db.Exec(sql.Lookup(db.driver, "repo-update-counter"), new, old, id)
+	if err != nil {
+		return 0, fmt.Errorf("database: update repository counter: %s", err)
+	}
+	updated, err := results.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("database: update repository counter: %s", err)
+	}
+	if updated == 0 {
+		return 0, nil
+	}
+	return new, nil
+}
+
 func (db *datastore) UpdateBuild(build *model.Build) error {
 	return meddler.Update(db, buildTable, build)
+}
+
+func (db *datastore) GetBuildCount() (count int, err error) {
+	err = db.QueryRow(
+		sql.Lookup(db.driver, "count-builds"),
+	).Scan(&count)
+	return
 }
 
 const buildTable = "builds"
@@ -86,7 +144,7 @@ SELECT *
 FROM builds
 WHERE build_repo_id = ?
 ORDER BY build_number DESC
-LIMIT 50
+LIMIT 50 OFFSET ?
 `
 
 const buildNumberQuery = `

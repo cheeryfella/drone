@@ -1,44 +1,23 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package session
 
 import (
-	"os"
 	"testing"
-
-	"github.com/drone/drone/model"
-	"github.com/franela/goblin"
-	"github.com/gin-gonic/gin"
 )
 
 func TestSetPerm(t *testing.T) {
-	g := goblin.Goblin(t)
-	g.Describe("SetPerm", func() {
-		g.BeforeEach(func() {
-			os.Unsetenv("PUBLIC_MODE")
-		})
-		g.It("Should set pull to false (private repo, user not logged in)", func() {
-			c := gin.Context{}
-			c.Set("repo", &model.Repo{
-				IsPrivate: true,
-			})
-			SetPerm()(&c)
-			v, ok := c.Get("perm")
-			g.Assert(ok).IsTrue("perm was not set")
-			p, ok := v.(*model.Perm)
-			g.Assert(ok).IsTrue("perm was the wrong type")
-			g.Assert(p.Pull).IsFalse("pull should be false")
-		})
-		g.It("Should set pull to true (private repo, user not logged in, public mode)", func() {
-			os.Setenv("PUBLIC_MODE", "true")
-			c := gin.Context{}
-			c.Set("repo", &model.Repo{
-				IsPrivate: true,
-			})
-			SetPerm()(&c)
-			v, ok := c.Get("perm")
-			g.Assert(ok).IsTrue("perm was not set")
-			p, ok := v.(*model.Perm)
-			g.Assert(ok).IsTrue("perm was the wrong type")
-			g.Assert(p.Pull).IsTrue("pull should be true")
-		})
-	})
+
 }

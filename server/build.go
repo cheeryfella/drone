@@ -1,6 +1,21 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,7 +39,13 @@ import (
 
 func GetBuilds(c *gin.Context) {
 	repo := session.Repo(c)
-	builds, err := store.GetBuildList(c, repo)
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		c.AbortWithError(http.StatusBadRequest, err)
+		return
+	}
+
+	builds, err := store.GetBuildList(c, repo, page)
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
@@ -50,8 +71,10 @@ func GetBuild(c *gin.Context) {
 		c.AbortWithError(http.StatusInternalServerError, err)
 		return
 	}
+	files, _ := store.FromContext(c).FileList(build)
 	procs, _ := store.FromContext(c).ProcList(build)
 	build.Procs = model.Tree(procs)
+	build.Files = files
 
 	c.JSON(http.StatusOK, build)
 }
@@ -77,7 +100,7 @@ func GetBuildLogs(c *gin.Context) {
 	// parse the build number and job sequence number from
 	// the repquest parameter.
 	num, _ := strconv.Atoi(c.Params.ByName("number"))
-	ppid, _ := strconv.Atoi(c.Params.ByName("ppid"))
+	ppid, _ := strconv.Atoi(c.Params.ByName("pid"))
 	name := c.Params.ByName("proc")
 
 	build, err := store.GetBuildNumber(c, repo, num)
@@ -87,6 +110,38 @@ func GetBuildLogs(c *gin.Context) {
 	}
 
 	proc, err := store.FromContext(c).ProcChild(build, ppid, name)
+	if err != nil {
+		c.AbortWithError(404, err)
+		return
+	}
+
+	rc, err := store.FromContext(c).LogFind(proc)
+	if err != nil {
+		c.AbortWithError(404, err)
+		return
+	}
+
+	defer rc.Close()
+
+	c.Header("Content-Type", "application/json")
+	io.Copy(c.Writer, rc)
+}
+
+func GetProcLogs(c *gin.Context) {
+	repo := session.Repo(c)
+
+	// parse the build number and job sequence number from
+	// the repquest parameter.
+	num, _ := strconv.Atoi(c.Params.ByName("number"))
+	pid, _ := strconv.Atoi(c.Params.ByName("pid"))
+
+	build, err := store.GetBuildNumber(c, repo, num)
+	if err != nil {
+		c.AbortWithError(404, err)
+		return
+	}
+
+	proc, err := store.FromContext(c).ProcFind(build, pid)
 	if err != nil {
 		c.AbortWithError(404, err)
 		return
@@ -139,6 +194,56 @@ func DeleteBuild(c *gin.Context) {
 	store.FromContext(c).ProcUpdate(proc)
 
 	Config.Services.Queue.Error(context.Background(), fmt.Sprint(proc.ID), queue.ErrCancel)
+	c.String(204, "")
+}
+
+// ZombieKill kills zombie processes stuck in an infinite pending
+// or running state. This can only be invoked by administrators and
+// may have negative effects.
+func ZombieKill(c *gin.Context) {
+	repo := session.Repo(c)
+
+	// parse the build number and job sequence number from
+	// the repquest parameter.
+	num, _ := strconv.Atoi(c.Params.ByName("number"))
+
+	build, err := store.GetBuildNumber(c, repo, num)
+	if err != nil {
+		c.AbortWithError(404, err)
+		return
+	}
+
+	procs, err := store.FromContext(c).ProcList(build)
+	if err != nil {
+		c.AbortWithError(404, err)
+		return
+	}
+
+	if build.Status != model.StatusRunning {
+		c.String(400, "Cannot force cancel a non-running build")
+		return
+	}
+
+	for _, proc := range procs {
+		if proc.Running() {
+			proc.State = model.StatusKilled
+			proc.ExitCode = 137
+			proc.Stopped = time.Now().Unix()
+			if proc.Started == 0 {
+				proc.Started = proc.Stopped
+			}
+		}
+	}
+
+	for _, proc := range procs {
+		store.FromContext(c).ProcUpdate(proc)
+		Config.Services.Queue.Error(context.Background(), fmt.Sprint(proc.ID), queue.ErrCancel)
+	}
+
+	build.Status = model.StatusKilled
+	build.Finished = time.Now().Unix()
+	store.FromContext(c).UpdateBuild(build)
+
 	c.String(204, "")
 }
 
@@ -197,7 +302,7 @@ func PostApproval(c *gin.Context) {
 	// get the previous build so that we can send
 	// on status change notifications
 	last, _ := store.GetBuildLastBefore(c, repo, build.Branch, build.ID)
-	secs, err := Config.Services.Secrets.SecretList(repo)
+	secs, err := Config.Services.Secrets.SecretListBuild(repo, build)
 	if err != nil {
 		logrus.Debugf("Error getting secrets for %s#%d. %s", repo.FullName, build.Number, err)
 	}
@@ -205,12 +310,19 @@ func PostApproval(c *gin.Context) {
 	if err != nil {
 		logrus.Debugf("Error getting registry credentials for %s#%d. %s", repo.FullName, build.Number, err)
 	}
+	envs := map[string]string{}
+	if Config.Services.Environ != nil {
+		globals, _ := Config.Services.Environ.EnvironList(repo)
+		for _, global := range globals {
+			envs[global.Name] = global.Value
+		}
+	}
 
 	defer func() {
 		uri := fmt.Sprintf("%s/%s/%d", httputil.GetURL(c.Request), repo.FullName, build.Number)
 		err = remote_.Status(user, repo, build, uri)
 		if err != nil {
-			logrus.Errorf("error setting commit status for %s/%d", repo.FullName, build.Number)
+			logrus.Errorf("error setting commit status for %s/%d: %v", repo.FullName, build.Number, err)
 		}
 	}()
 
@@ -223,6 +335,7 @@ func PostApproval(c *gin.Context) {
 		Regs:  regs,
 		Link:  httputil.GetURL(c.Request),
 		Yaml:  conf.Data,
+		Envs:  envs,
 	}
 	items, err := b.Build()
 	if err != nil {
@@ -335,7 +448,7 @@ func PostDecline(c *gin.Context) {
 	uri := fmt.Sprintf("%s/%s/%d", httputil.GetURL(c.Request), repo.FullName, build.Number)
 	err = remote_.Status(user, repo, build, uri)
 	if err != nil {
-		logrus.Errorf("error setting commit status for %s/%d", repo.FullName, build.Number)
+		logrus.Errorf("error setting commit status for %s/%d: %v", repo.FullName, build.Number, err)
 	}
 
 	c.JSON(200, build)
@@ -361,7 +474,6 @@ func PostBuild(c *gin.Context) {
 
 	remote_ := remote.FromContext(c)
 	repo := session.Repo(c)
-	fork := c.DefaultQuery("fork", "false")
 
 	num, err := strconv.Atoi(c.Param("number"))
 	if err != nil {
@@ -380,6 +492,13 @@ func PostBuild(c *gin.Context) {
 	if err != nil {
 		logrus.Errorf("failure to get build %d. %s", num, err)
 		c.AbortWithError(404, err)
+		return
+	}
+
+	switch build.Status {
+	case model.StatusDeclined,
+		model.StatusBlocked:
+		c.String(500, "cannot restart a build with status %s", build.Status)
 		return
 	}
 
@@ -408,57 +527,28 @@ func PostBuild(c *gin.Context) {
 		return
 	}
 
-	// must not restart a running build
-	if build.Status == model.StatusPending || build.Status == model.StatusRunning {
-		c.String(409, "Cannot re-start a started build")
-		return
+	build.ID = 0
+	build.Number = 0
+	build.Parent = num
+	build.Status = model.StatusPending
+	build.Started = 0
+	build.Finished = 0
+	build.Enqueued = time.Now().UTC().Unix()
+	build.Error = ""
+	build.Deploy = c.DefaultQuery("deploy_to", build.Deploy)
+
+	event := c.DefaultQuery("event", build.Event)
+	if event == model.EventPush ||
+		event == model.EventPull ||
+		event == model.EventTag ||
+		event == model.EventDeploy {
+		build.Event = event
 	}
 
-	// forking the build creates a duplicate of the build
-	// and then executes. This retains prior build history.
-	if forkit, _ := strconv.ParseBool(fork); forkit {
-		build.ID = 0
-		build.Number = 0
-		build.Parent = num
-		build.Status = model.StatusPending
-		build.Started = 0
-		build.Finished = 0
-		build.Enqueued = time.Now().UTC().Unix()
-		build.Error = ""
-		err = store.CreateBuild(c, build)
-		if err != nil {
-			c.String(500, err.Error())
-			return
-		}
-
-		event := c.DefaultQuery("event", build.Event)
-		if event == model.EventPush ||
-			event == model.EventPull ||
-			event == model.EventTag ||
-			event == model.EventDeploy {
-			build.Event = event
-		}
-		build.Deploy = c.DefaultQuery("deploy_to", build.Deploy)
-	} else {
-		// todo move this to database tier
-		// and wrap inside a transaction
-		build.Status = model.StatusPending
-		build.Started = 0
-		build.Finished = 0
-		build.Enqueued = time.Now().UTC().Unix()
-		build.Error = ""
-
-		err = store.FromContext(c).ProcClear(build)
-		if err != nil {
-			c.AbortWithStatus(500)
-			return
-		}
-
-		err = store.UpdateBuild(c, build)
-		if err != nil {
-			c.AbortWithStatus(500)
-			return
-		}
+	err = store.CreateBuild(c, build)
+	if err != nil {
+		c.String(500, err.Error())
+		return
 	}
 
 	// Read query string parameters into buildParams, exclude reserved params
@@ -476,13 +566,19 @@ func PostBuild(c *gin.Context) {
 	// get the previous build so that we can send
 	// on status change notifications
 	last, _ := store.GetBuildLastBefore(c, repo, build.Branch, build.ID)
-	secs, err := Config.Services.Secrets.SecretList(repo)
+	secs, err := Config.Services.Secrets.SecretListBuild(repo, build)
 	if err != nil {
 		logrus.Debugf("Error getting secrets for %s#%d. %s", repo.FullName, build.Number, err)
 	}
 	regs, err := Config.Services.Registries.RegistryList(repo)
 	if err != nil {
 		logrus.Debugf("Error getting registry credentials for %s#%d. %s", repo.FullName, build.Number, err)
+	}
+	if Config.Services.Environ != nil {
+		globals, _ := Config.Services.Environ.EnvironList(repo)
+		for _, global := range globals {
+			buildParams[global.Name] = global.Value
+		}
 	}
 
 	b := builder{
@@ -494,8 +590,8 @@ func PostBuild(c *gin.Context) {
 		Regs:  regs,
 		Link:  httputil.GetURL(c.Request),
 		Yaml:  conf.Data,
+		Envs:  buildParams,
 	}
-	// TODO inject environment varibles !!!!!! buildParams
 	items, err := b.Build()
 	if err != nil {
 		build.Status = model.StatusError
@@ -585,3 +681,54 @@ func PostBuild(c *gin.Context) {
 		Config.Services.Queue.Push(context.Background(), task)
 	}
 }
+
+//
+///
+//
+
+func DeleteBuildLogs(c *gin.Context) {
+	repo := session.Repo(c)
+	user := session.User(c)
+	num, _ := strconv.Atoi(c.Params.ByName("number"))
+
+	build, err := store.GetBuildNumber(c, repo, num)
+	if err != nil {
+		c.AbortWithError(404, err)
+		return
+	}
+
+	procs, err := store.FromContext(c).ProcList(build)
+	if err != nil {
+		c.AbortWithError(404, err)
+		return
+	}
+
+	switch build.Status {
+	case model.StatusRunning, model.StatusPending:
+		c.String(400, "Cannot delete logs for a pending or running build")
+		return
+	}
+
+	for _, proc := range procs {
+		t := time.Now().UTC()
+		buf := bytes.NewBufferString(fmt.Sprintf(deleteStr, proc.Name, user.Login, t.Format(time.UnixDate)))
+		lerr := store.FromContext(c).LogSave(proc, buf)
+		if lerr != nil {
+			err = lerr
+		}
+	}
+	if err != nil {
+		c.String(400, "There was a problem deleting your logs. %s", err)
+		return
+	}
+
+	c.String(204, "")
+}
+
+var deleteStr = `[
+	{
+	  "proc": %q,
+	  "pos": 0,
+	  "out": "logs purged by %s on %s\n"
+	}
+]`

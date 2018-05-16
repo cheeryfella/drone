@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package sqlite
 
 import (
@@ -92,6 +106,74 @@ var migrations = []struct {
 		name: "create-index-sender-repos",
 		stmt: createIndexSenderRepos,
 	},
+	{
+		name: "alter-table-add-repo-visibility",
+		stmt: alterTableAddRepoVisibility,
+	},
+	{
+		name: "update-table-set-repo-visibility",
+		stmt: updateTableSetRepoVisibility,
+	},
+	{
+		name: "alter-table-add-repo-seq",
+		stmt: alterTableAddRepoSeq,
+	},
+	{
+		name: "update-table-set-repo-seq",
+		stmt: updateTableSetRepoSeq,
+	},
+	{
+		name: "update-table-set-repo-seq-default",
+		stmt: updateTableSetRepoSeqDefault,
+	},
+	{
+		name: "alter-table-add-repo-active",
+		stmt: alterTableAddRepoActive,
+	},
+	{
+		name: "update-table-set-repo-active",
+		stmt: updateTableSetRepoActive,
+	},
+	{
+		name: "alter-table-add-user-synced",
+		stmt: alterTableAddUserSynced,
+	},
+	{
+		name: "update-table-set-user-synced",
+		stmt: updateTableSetUserSynced,
+	},
+	{
+		name: "create-table-perms",
+		stmt: createTablePerms,
+	},
+	{
+		name: "create-index-perms-repo",
+		stmt: createIndexPermsRepo,
+	},
+	{
+		name: "create-index-perms-user",
+		stmt: createIndexPermsUser,
+	},
+	{
+		name: "alter-table-add-file-pid",
+		stmt: alterTableAddFilePid,
+	},
+	{
+		name: "alter-table-add-file-meta-passed",
+		stmt: alterTableAddFileMetaPassed,
+	},
+	{
+		name: "alter-table-add-file-meta-failed",
+		stmt: alterTableAddFileMetaFailed,
+	},
+	{
+		name: "alter-table-add-file-meta-skipped",
+		stmt: alterTableAddFileMetaSkipped,
+	},
+	{
+		name: "alter-table-update-file-meta",
+		stmt: alterTableUpdateFileMeta,
+	},
 }
 
 // Migrate performs the database migration. If the migration fails
@@ -154,7 +236,7 @@ func selectCompleted(db *sql.DB) (map[string]struct{}, error) {
 
 var migrationTableCreate = `
 CREATE TABLE IF NOT EXISTS migrations (
- name VARCHAR(512)
+ name VARCHAR(255)
 ,UNIQUE(name)
 )
 `
@@ -442,4 +524,116 @@ CREATE TABLE IF NOT EXISTS senders (
 
 var createIndexSenderRepos = `
 CREATE INDEX IF NOT EXISTS sender_repo_ix ON senders (sender_repo_id);
+`
+
+//
+// 013_add_column_repo_visibility.sql
+//
+
+var alterTableAddRepoVisibility = `
+ALTER TABLE repos ADD COLUMN repo_visibility TEXT
+`
+
+var updateTableSetRepoVisibility = `
+UPDATE repos
+SET repo_visibility = CASE
+  WHEN repo_private = 0 THEN 'public'
+  ELSE 'private'
+  END
+`
+
+//
+// 014_add_column_repo_seq.sql
+//
+
+var alterTableAddRepoSeq = `
+ALTER TABLE repos ADD COLUMN repo_counter INTEGER;
+`
+
+var updateTableSetRepoSeq = `
+UPDATE repos SET repo_counter = (
+  SELECT max(build_number)
+  FROM builds
+  WHERE builds.build_repo_id = repos.repo_id
+)
+`
+
+var updateTableSetRepoSeqDefault = `
+UPDATE repos SET repo_counter = 0
+WHERE repo_counter IS NULL
+`
+
+//
+// 015_add_column_repo_active.sql
+//
+
+var alterTableAddRepoActive = `
+ALTER TABLE repos ADD COLUMN repo_active BOOLEAN
+`
+
+var updateTableSetRepoActive = `
+UPDATE repos SET repo_active = 1
+`
+
+//
+// 016_add_column_user_synced.sql
+//
+
+var alterTableAddUserSynced = `
+ALTER TABLE users ADD COLUMN user_synced INTEGER;
+`
+
+var updateTableSetUserSynced = `
+UPDATE users SET user_synced = 0
+`
+
+//
+// 017_create_table_perms.sql
+//
+
+var createTablePerms = `
+CREATE TABLE IF NOT EXISTS perms (
+ perm_user_id INTEGER NOT NULL
+,perm_repo_id INTEGER NOT NULL
+,perm_pull    BOOLEAN
+,perm_push    BOOLEAN
+,perm_admin   BOOLEAN
+,perm_synced  INTEGER
+,UNIQUE(perm_user_id, perm_repo_id)
+);
+`
+
+var createIndexPermsRepo = `
+CREATE INDEX IF NOT EXISTS ix_perms_repo ON perms (perm_repo_id);
+`
+
+var createIndexPermsUser = `
+CREATE INDEX IF NOT EXISTS ix_perms_user ON perms (perm_user_id);
+`
+
+//
+// 018_add_column_file_pid.sql
+//
+
+var alterTableAddFilePid = `
+ALTER TABLE files ADD COLUMN file_pid INTEGER
+`
+
+var alterTableAddFileMetaPassed = `
+ALTER TABLE files ADD COLUMN file_meta_passed INTEGER
+`
+
+var alterTableAddFileMetaFailed = `
+ALTER TABLE files ADD COLUMN file_meta_failed INTEGER
+`
+
+var alterTableAddFileMetaSkipped = `
+ALTER TABLE files ADD COLUMN file_meta_skipped INTEGER
+`
+
+var alterTableUpdateFileMeta = `
+UPDATE files SET
+ file_meta_passed=0
+,file_meta_failed=0
+,file_meta_skipped=0
 `

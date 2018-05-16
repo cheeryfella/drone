@@ -1,11 +1,25 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package session
 
 import (
 	"net/http"
-	"os"
+	"time"
 
-	"github.com/drone/drone/cache"
 	"github.com/drone/drone/model"
+	"github.com/drone/drone/remote"
 	"github.com/drone/drone/store"
 
 	log "github.com/Sirupsen/logrus"
@@ -79,57 +93,46 @@ func Perm(c *gin.Context) *model.Perm {
 }
 
 func SetPerm() gin.HandlerFunc {
-	PUBLIC_MODE := os.Getenv("PUBLIC_MODE")
 
 	return func(c *gin.Context) {
 		user := User(c)
 		repo := Repo(c)
-		perm := &model.Perm{}
+		perm := new(model.Perm)
 
 		switch {
-		// if the user is not authenticated, and the
-		// repository is private, the user has NO permission
-		// to view the repository.
-		case user == nil && repo.IsPrivate == true:
-			perm.Pull = false
-			perm.Push = false
-			perm.Admin = false
-
-		// if the user is not authenticated, but the repository
-		// is public, the user has pull-rights only.
-		case user == nil && repo.IsPrivate == false:
-			perm.Pull = true
-			perm.Push = false
-			perm.Admin = false
-
-		case user.Admin:
-			perm.Pull = true
-			perm.Push = true
-			perm.Admin = true
-
-		// otherwise if the user is authenticated we should
-		// check the remote system to get the users permissiosn.
-		default:
+		case user != nil:
 			var err error
-			perm, err = cache.GetPerms(c, user, repo.Owner, repo.Name)
+			perm, err = store.FromContext(c).PermFind(user, repo)
 			if err != nil {
-				perm.Pull = false
-				perm.Push = false
-				perm.Admin = false
-
-				// debug
-				log.Errorf("Error fetching permission for %s %s",
-					user.Login, repo.FullName)
+				log.Errorf("Error fetching permission for %s %s. %s",
+					user.Login, repo.FullName, err)
 			}
-			// if we couldn't fetch permissions, but the repository
-			// is public, we should grant the user pull access.
-			if err != nil && repo.IsPrivate == false {
-				perm.Pull = true
+			if time.Unix(perm.Synced, 0).Add(time.Hour).Before(time.Now()) {
+				perm, err = remote.FromContext(c).Perm(user, repo.Owner, repo.Name)
+				if err == nil {
+					log.Debugf("Synced user permission for %s %s", user.Login, repo.FullName)
+					perm.Repo = repo.FullName
+					perm.UserID = user.ID
+					perm.Synced = time.Now().Unix()
+					store.FromContext(c).PermUpsert(perm)
+				}
 			}
 		}
 
-		// all build logs are visible in public mode
-		if PUBLIC_MODE != "" {
+		if perm == nil {
+			perm = new(model.Perm)
+		}
+
+		if user != nil && user.Admin {
+			perm.Pull = true
+			perm.Push = true
+			perm.Admin = true
+		}
+
+		switch {
+		case repo.Visibility == model.VisibilityPublic:
+			perm.Pull = true
+		case repo.Visibility == model.VisibilityInternal && user != nil:
 			perm.Pull = true
 		}
 

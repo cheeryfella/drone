@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package bitbucket
 
 import (
@@ -47,18 +61,6 @@ func Test_helper(t *testing.T) {
 		g.It("should convert error desc", func() {
 			g.Assert(convertDesc(model.StatusKilled)).Equal(descError)
 			g.Assert(convertDesc(model.StatusError)).Equal(descError)
-		})
-
-		g.It("should convert repository lite", func() {
-			from := &internal.Repo{}
-			from.FullName = "octocat/hello-world"
-			from.Owner.Links.Avatar.Href = "http://..."
-
-			to := convertRepoLite(from)
-			g.Assert(to.Avatar).Equal(from.Owner.Links.Avatar.Href)
-			g.Assert(to.FullName).Equal(from.FullName)
-			g.Assert(to.Owner).Equal("octocat")
-			g.Assert(to.Name).Equal("hello-world")
 		})
 
 		g.It("should convert repository", func() {

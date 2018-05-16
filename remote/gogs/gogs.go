@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gogs
 
 import (
@@ -52,7 +66,7 @@ func New(opts Opts) (remote.Remote, error) {
 	}, nil
 }
 
-// Login authenticates an account with Gogs using basic authenticaiton. The
+// Login authenticates an account with Gogs using basic authentication. The
 // Gogs account details are returned when the user is successfully authenticated.
 func (c *client) Login(res http.ResponseWriter, req *http.Request) (*model.User, error) {
 	var (
@@ -127,11 +141,6 @@ func (c *client) Teams(u *model.User) ([]*model.Team, error) {
 	return teams, nil
 }
 
-// TeamPerm is not supported by the Gogs driver.
-func (c *client) TeamPerm(u *model.User, org string) (*model.Perm, error) {
-	return nil, nil
-}
-
 // Repo returns the named Gogs repository.
 func (c *client) Repo(u *model.User, owner, name string) (*model.Repo, error) {
 	client := c.newClientToken(u.Token)
@@ -139,16 +148,13 @@ func (c *client) Repo(u *model.User, owner, name string) (*model.Repo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.PrivateMode {
-		repo.Private = true
-	}
-	return toRepo(repo), nil
+	return toRepo(repo, c.PrivateMode), nil
 }
 
 // Repos returns a list of all repositories for the Gogs account, including
 // organization repositories.
-func (c *client) Repos(u *model.User) ([]*model.RepoLite, error) {
-	repos := []*model.RepoLite{}
+func (c *client) Repos(u *model.User) ([]*model.Repo, error) {
+	repos := []*model.Repo{}
 
 	client := c.newClientToken(u.Token)
 	all, err := client.ListMyRepos()
@@ -157,7 +163,7 @@ func (c *client) Repos(u *model.User) ([]*model.RepoLite, error) {
 	}
 
 	for _, repo := range all {
-		repos = append(repos, toRepoLite(repo))
+		repos = append(repos, toRepo(repo, c.PrivateMode))
 	}
 	return repos, err
 }

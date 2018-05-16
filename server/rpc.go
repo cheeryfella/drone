@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package server
 
 import (
@@ -7,19 +21,24 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
+
+	oldcontext "golang.org/x/net/context"
+
+	"google.golang.org/grpc/metadata"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/cncd/logging"
 	"github.com/cncd/pipeline/pipeline/rpc"
+	"github.com/cncd/pipeline/pipeline/rpc/proto"
 	"github.com/cncd/pubsub"
 	"github.com/cncd/queue"
-	"github.com/coreos/go-semver/semver"
-	"github.com/gin-gonic/gin"
 
 	"github.com/drone/drone/model"
 	"github.com/drone/drone/remote"
 	"github.com/drone/drone/store"
-	"github.com/drone/drone/version"
+
+	"github.com/drone/expr"
 )
 
 // This file is a complete disaster because I'm trying to wedge in some
@@ -35,6 +54,8 @@ var Config = struct {
 		Senders    model.SenderService
 		Secrets    model.SecretService
 		Registries model.RegistryService
+		Environ    model.EnvironService
+		Limiter    model.Limiter
 	}
 	Storage struct {
 		// Users  model.UserStore
@@ -48,70 +69,27 @@ var Config = struct {
 		// Secrets model.SecretStore
 	}
 	Server struct {
-		Key  string
-		Cert string
-		Host string
-		Port string
-		Pass string
+		Key            string
+		Cert           string
+		Host           string
+		Port           string
+		Pass           string
+		RepoConfig     string
+		SessionExpires time.Duration
 		// Open bool
 		// Orgs map[string]struct{}
 		// Admins map[string]struct{}
 	}
+	Prometheus struct {
+		AuthToken string
+	}
 	Pipeline struct {
+		Limits     model.ResourceLimit
 		Volumes    []string
 		Networks   []string
 		Privileged []string
 	}
 }{}
-
-// var config = struct {
-// 	pubsub pubsub.Publisher
-// 	queue  queue.Queue
-// 	logger logging.Log
-// 	secret string
-// 	host   string
-// }{
-// 	pubsub.New(),
-// 	queue.New(),
-// 	logging.New(),
-// 	os.Getenv("DRONE_SECRET"),
-// 	os.Getenv("DRONE_HOST"),
-// }
-
-// func SetupRPC() gin.HandlerFunc {
-// 	return func(c *gin.Context) {
-// 		c.Next()
-// 	}
-// }
-
-func RPCHandler(c *gin.Context) {
-
-	if secret := c.Request.Header.Get("Authorization"); secret != "Bearer "+Config.Server.Pass {
-		log.Printf("Unable to connect agent. Invalid authorization token %q does not match %q", secret, Config.Server.Pass)
-		c.String(401, "Unable to connect agent. Invalid authorization token")
-		return
-	}
-
-	agent := semver.New(
-		c.Request.Header.Get("X-Drone-Version"),
-	)
-	logrus.Debugf("agent connected: ip address %s: version %s", c.ClientIP(), agent)
-	if agent.LessThan(version.Version) {
-		logrus.Warnf("Version mismatch. Agent version %s < Server version %s", agent, version.Version)
-		c.String(409, "Version mismatch. Agent version %s < Server version %s", agent, version.Version)
-		return
-	}
-
-	peer := RPC{
-		remote: remote.FromContext(c),
-		store:  store.FromContext(c),
-		queue:  Config.Services.Queue,
-		pubsub: Config.Services.Pubsub,
-		logger: Config.Services.Logs,
-		host:   Config.Server.Host,
-	}
-	rpc.NewServer(&peer).ServeHTTP(c.Writer, c.Request)
-}
 
 type RPC struct {
 	remote remote.Remote
@@ -124,13 +102,17 @@ type RPC struct {
 
 // Next implements the rpc.Next function
 func (s *RPC) Next(c context.Context, filter rpc.Filter) (*rpc.Pipeline, error) {
-	fn := func(task *queue.Task) bool {
-		for k, v := range filter.Labels {
-			if task.Labels[k] != v {
-				return false
-			}
+	metadata, ok := metadata.FromContext(c)
+	if ok {
+		hostname, ok := metadata["hostname"]
+		if ok && len(hostname) != 0 {
+			logrus.Debugf("agent connected: %s: polling", hostname[0])
 		}
-		return true
+	}
+
+	fn, err := createFilterFunc(filter)
+	if err != nil {
+		return nil, err
 	}
 	task, err := s.queue.Poll(c, fn)
 	if err != nil {
@@ -139,6 +121,17 @@ func (s *RPC) Next(c context.Context, filter rpc.Filter) (*rpc.Pipeline, error) 
 		return nil, nil
 	}
 	pipeline := new(rpc.Pipeline)
+
+	// check if the process was previously cancelled
+	// cancelled, _ := s.checkCancelled(pipeline)
+	// if cancelled {
+	// 	logrus.Debugf("ignore pid %v: cancelled by user", pipeline.ID)
+	// 	if derr := s.queue.Done(c, pipeline.ID); derr != nil {
+	// 		logrus.Errorf("error: done: cannot ack proc_id %v: %s", pipeline.ID, err)
+	// 	}
+	// 	return nil, nil
+	// }
+
 	err = json.Unmarshal(task.Data, pipeline)
 	return pipeline, err
 }
@@ -178,6 +171,14 @@ func (s *RPC) Update(c context.Context, id string, state rpc.State) error {
 		return err
 	}
 
+	metadata, ok := metadata.FromContext(c)
+	if ok {
+		hostname, ok := metadata["hostname"]
+		if ok && len(hostname) != 0 {
+			proc.Machine = hostname[0]
+		}
+	}
+
 	repo, err := s.store.GetRepo(build.RepoID)
 	if err != nil {
 		log.Printf("error: cannot find repo with id %d: %s", build.RepoID, err)
@@ -192,9 +193,16 @@ func (s *RPC) Update(c context.Context, id string, state rpc.State) error {
 		if state.ExitCode != 0 || state.Error != "" {
 			proc.State = model.StatusFailure
 		}
+		if state.ExitCode == 137 {
+			proc.State = model.StatusKilled
+		}
 	} else {
 		proc.Started = state.Started
 		proc.State = model.StatusRunning
+	}
+
+	if proc.Started == 0 && proc.Stopped != 0 {
+		proc.Started = build.Started
 	}
 
 	if err := s.store.ProcUpdate(proc); err != nil {
@@ -250,14 +258,43 @@ func (s *RPC) Upload(c context.Context, id string, file *rpc.File) error {
 		)
 	}
 
-	return Config.Storage.Files.FileCreate(&model.File{
+	report := &model.File{
 		BuildID: proc.BuildID,
 		ProcID:  proc.ID,
+		PID:     proc.PID,
 		Mime:    file.Mime,
 		Name:    file.Name,
 		Size:    file.Size,
 		Time:    file.Time,
-	},
+	}
+	if d, ok := file.Meta["X-Tests-Passed"]; ok {
+		report.Passed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Tests-Failed"]; ok {
+		report.Failed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Tests-Skipped"]; ok {
+		report.Skipped, _ = strconv.Atoi(d)
+	}
+
+	if d, ok := file.Meta["X-Checks-Passed"]; ok {
+		report.Passed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Checks-Failed"]; ok {
+		report.Failed, _ = strconv.Atoi(d)
+	}
+
+	if d, ok := file.Meta["X-Coverage-Lines"]; ok {
+		report.Passed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Coverage-Total"]; ok {
+		if total, _ := strconv.Atoi(d); total != 0 {
+			report.Failed = total - report.Passed
+		}
+	}
+
+	return Config.Storage.Files.FileCreate(
+		report,
 		bytes.NewBuffer(file.Data),
 	)
 }
@@ -273,6 +310,13 @@ func (s *RPC) Init(c context.Context, id string, state rpc.State) error {
 	if err != nil {
 		log.Printf("error: cannot find proc with id %d: %s", procID, err)
 		return err
+	}
+	metadata, ok := metadata.FromContext(c)
+	if ok {
+		hostname, ok := metadata["hostname"]
+		if ok && len(hostname) != 0 {
+			proc.Machine = hostname[0]
+		}
 	}
 
 	build, err := s.store.GetBuild(proc.BuildID)
@@ -401,7 +445,7 @@ func (s *RPC) Done(c context.Context, id string, state rpc.State) error {
 			uri := fmt.Sprintf("%s/%s/%d", s.host, repo.FullName, build.Number)
 			err = s.remote.Status(user, repo, build, uri)
 			if err != nil {
-				logrus.Errorf("error setting commit status for %s/%d", repo.FullName, build.Number)
+				logrus.Errorf("error setting commit status for %s/%d: %v", repo.FullName, build.Number, err)
 			}
 		}
 	}
@@ -432,4 +476,264 @@ func (s *RPC) Log(c context.Context, id string, line *rpc.Line) error {
 	entry.Data, _ = json.Marshal(line)
 	s.logger.Write(c, id, entry)
 	return nil
+}
+
+func (s *RPC) checkCancelled(pipeline *rpc.Pipeline) (bool, error) {
+	pid, err := strconv.ParseInt(pipeline.ID, 10, 64)
+	if err != nil {
+		return false, err
+	}
+	proc, err := s.store.ProcLoad(pid)
+	if err != nil {
+		return false, err
+	}
+	if proc.State == model.StatusKilled {
+		return true, nil
+	}
+	return false, err
+}
+
+func createFilterFunc(filter rpc.Filter) (queue.Filter, error) {
+	var st *expr.Selector
+	var err error
+
+	if filter.Expr != "" {
+		st, err = expr.ParseString(filter.Expr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return func(task *queue.Task) bool {
+		if st != nil {
+			match, _ := st.Eval(expr.NewRow(task.Labels))
+			return match
+		}
+
+		for k, v := range filter.Labels {
+			if task.Labels[k] != v {
+				return false
+			}
+		}
+		return true
+	}, nil
+}
+
+//
+//
+//
+
+// DroneServer is a grpc server implementation.
+type DroneServer struct {
+	Remote remote.Remote
+	Queue  queue.Queue
+	Pubsub pubsub.Publisher
+	Logger logging.Log
+	Store  store.Store
+	Host   string
+}
+
+func (s *DroneServer) Next(c oldcontext.Context, req *proto.NextRequest) (*proto.NextReply, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	filter := rpc.Filter{
+		Labels: req.GetFilter().GetLabels(),
+		Expr:   req.GetFilter().GetExpr(),
+	}
+
+	res := new(proto.NextReply)
+	pipeline, err := peer.Next(c, filter)
+	if err != nil {
+		return res, err
+	}
+	if pipeline == nil {
+		return res, err
+	}
+
+	res.Pipeline = new(proto.Pipeline)
+	res.Pipeline.Id = pipeline.ID
+	res.Pipeline.Timeout = pipeline.Timeout
+	res.Pipeline.Payload, _ = json.Marshal(pipeline.Config)
+
+	return res, err
+
+	// fn := func(task *queue.Task) bool {
+	// 	for k, v := range req.GetFilter().Labels {
+	// 		if task.Labels[k] != v {
+	// 			return false
+	// 		}
+	// 	}
+	// 	return true
+	// }
+	// task, err := s.Queue.Poll(c, fn)
+	// if err != nil {
+	// 	return nil, err
+	// } else if task == nil {
+	// 	return nil, nil
+	// }
+	//
+	// pipeline := new(rpc.Pipeline)
+	// json.Unmarshal(task.Data, pipeline)
+	//
+	// res := new(proto.NextReply)
+	// res.Pipeline = new(proto.Pipeline)
+	// res.Pipeline.Id = pipeline.ID
+	// res.Pipeline.Timeout = pipeline.Timeout
+	// res.Pipeline.Payload, _ = json.Marshal(pipeline.Config)
+	//
+	// // check if the process was previously cancelled
+	// // cancelled, _ := s.checkCancelled(pipeline)
+	// // if cancelled {
+	// // 	logrus.Debugf("ignore pid %v: cancelled by user", pipeline.ID)
+	// // 	if derr := s.queue.Done(c, pipeline.ID); derr != nil {
+	// // 		logrus.Errorf("error: done: cannot ack proc_id %v: %s", pipeline.ID, err)
+	// // 	}
+	// // 	return nil, nil
+	// // }
+	//
+	// return res, nil
+}
+
+func (s *DroneServer) Init(c oldcontext.Context, req *proto.InitRequest) (*proto.Empty, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	state := rpc.State{
+		Error:    req.GetState().GetError(),
+		ExitCode: int(req.GetState().GetExitCode()),
+		Finished: req.GetState().GetFinished(),
+		Started:  req.GetState().GetStarted(),
+		Proc:     req.GetState().GetName(),
+		Exited:   req.GetState().GetExited(),
+	}
+	res := new(proto.Empty)
+	err := peer.Init(c, req.GetId(), state)
+	return res, err
+}
+
+func (s *DroneServer) Update(c oldcontext.Context, req *proto.UpdateRequest) (*proto.Empty, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	state := rpc.State{
+		Error:    req.GetState().GetError(),
+		ExitCode: int(req.GetState().GetExitCode()),
+		Finished: req.GetState().GetFinished(),
+		Started:  req.GetState().GetStarted(),
+		Proc:     req.GetState().GetName(),
+		Exited:   req.GetState().GetExited(),
+	}
+	res := new(proto.Empty)
+	err := peer.Update(c, req.GetId(), state)
+	return res, err
+}
+
+func (s *DroneServer) Upload(c oldcontext.Context, req *proto.UploadRequest) (*proto.Empty, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	file := &rpc.File{
+		Data: req.GetFile().GetData(),
+		Mime: req.GetFile().GetMime(),
+		Name: req.GetFile().GetName(),
+		Proc: req.GetFile().GetProc(),
+		Size: int(req.GetFile().GetSize()),
+		Time: req.GetFile().GetTime(),
+		Meta: req.GetFile().GetMeta(),
+	}
+
+	res := new(proto.Empty)
+	err := peer.Upload(c, req.GetId(), file)
+	return res, err
+}
+
+func (s *DroneServer) Done(c oldcontext.Context, req *proto.DoneRequest) (*proto.Empty, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	state := rpc.State{
+		Error:    req.GetState().GetError(),
+		ExitCode: int(req.GetState().GetExitCode()),
+		Finished: req.GetState().GetFinished(),
+		Started:  req.GetState().GetStarted(),
+		Proc:     req.GetState().GetName(),
+		Exited:   req.GetState().GetExited(),
+	}
+	res := new(proto.Empty)
+	err := peer.Done(c, req.GetId(), state)
+	return res, err
+}
+
+func (s *DroneServer) Wait(c oldcontext.Context, req *proto.WaitRequest) (*proto.Empty, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	res := new(proto.Empty)
+	err := peer.Wait(c, req.GetId())
+	return res, err
+}
+
+func (s *DroneServer) Extend(c oldcontext.Context, req *proto.ExtendRequest) (*proto.Empty, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	res := new(proto.Empty)
+	err := peer.Extend(c, req.GetId())
+	return res, err
+}
+
+func (s *DroneServer) Log(c oldcontext.Context, req *proto.LogRequest) (*proto.Empty, error) {
+	peer := RPC{
+		remote: s.Remote,
+		store:  s.Store,
+		queue:  s.Queue,
+		pubsub: s.Pubsub,
+		logger: s.Logger,
+		host:   s.Host,
+	}
+	line := &rpc.Line{
+		Out:  req.GetLine().GetOut(),
+		Pos:  int(req.GetLine().GetPos()),
+		Time: req.GetLine().GetTime(),
+		Proc: req.GetLine().GetProc(),
+	}
+	res := new(proto.Empty)
+	err := peer.Log(c, req.GetId(), line)
+	return res, err
 }

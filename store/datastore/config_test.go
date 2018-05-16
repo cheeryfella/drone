@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package datastore
 
 import (
@@ -62,14 +76,23 @@ func TestConfigApproved(t *testing.T) {
 	defer func() {
 		s.Exec("delete from config")
 		s.Exec("delete from builds")
+		s.Exec("delete from repos")
 		s.Close()
 	}()
+
+	repo := &model.Repo{
+		UserID:   1,
+		FullName: "bradrydzewski/drone",
+		Owner:    "bradrydzewski",
+		Name:     "drone",
+	}
+	s.CreateRepo(repo)
 
 	var (
 		data = "pipeline: [ { image: golang, commands: [ go build, go test ] } ]"
 		hash = "8d8647c9aa90d893bfb79dddbe901f03e258588121e5202632f8ae5738590b26"
 		conf = &model.Config{
-			RepoID: 1,
+			RepoID: repo.ID,
 			Data:   data,
 			Hash:   hash,
 		}
@@ -79,15 +102,14 @@ func TestConfigApproved(t *testing.T) {
 		t.Errorf("Unexpected error: insert config: %s", err)
 		return
 	}
-
 	s.CreateBuild(&model.Build{
-		RepoID:   1,
+		RepoID:   repo.ID,
 		ConfigID: conf.ID,
 		Status:   model.StatusBlocked,
 		Commit:   "85f8c029b902ed9400bc600bac301a0aadb144ac",
 	})
 	s.CreateBuild(&model.Build{
-		RepoID:   1,
+		RepoID:   repo.ID,
 		ConfigID: conf.ID,
 		Status:   model.StatusPending,
 		Commit:   "85f8c029b902ed9400bc600bac301a0aadb144ac",
@@ -99,7 +121,7 @@ func TestConfigApproved(t *testing.T) {
 	}
 
 	s.CreateBuild(&model.Build{
-		RepoID:   1,
+		RepoID:   repo.ID,
 		ConfigID: conf.ID,
 		Status:   model.StatusRunning,
 		Commit:   "85f8c029b902ed9400bc600bac301a0aadb144ac",

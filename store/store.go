@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package store
 
 import (
@@ -18,13 +32,6 @@ type Store interface {
 	// GetUserList gets a list of all users in the system.
 	GetUserList() ([]*model.User, error)
 
-	// GetUserFeed gets a user activity feed.
-	GetUserFeed([]*model.RepoLite) ([]*model.Feed, error)
-
-	// GetUserFeedLatest gets a user activity feed for all repositories including
-	// only the latest build for each repository.
-	GetUserFeedLatest(listof []*model.RepoLite) ([]*model.Feed, error)
-
 	// GetUserCount gets a count of all users in the system.
 	GetUserCount() (int, error)
 
@@ -42,9 +49,6 @@ type Store interface {
 
 	// GetRepoName gets a repo by its full name.
 	GetRepoName(string) (*model.Repo, error)
-
-	// GetRepoListOf gets the list of enumerated repos in the system.
-	GetRepoListOf([]*model.RepoLite) ([]*model.Repo, error)
 
 	// GetRepoCount gets a count of all repositories in the system.
 	GetRepoCount() (int, error)
@@ -77,10 +81,13 @@ type Store interface {
 	GetBuildLastBefore(*model.Repo, string, int64) (*model.Build, error)
 
 	// GetBuildList gets a list of builds for the repository
-	GetBuildList(*model.Repo) ([]*model.Build, error)
+	GetBuildList(*model.Repo, int) ([]*model.Build, error)
 
 	// GetBuildQueue gets a list of build in queue.
 	GetBuildQueue() ([]*model.Feed, error)
+
+	// GetBuildCount gets a count of all builds in the system.
+	GetBuildCount() (int, error)
 
 	// CreateBuild creates a new build and jobs.
 	CreateBuild(*model.Build, ...*model.Proc) error
@@ -91,6 +98,18 @@ type Store interface {
 	//
 	// new functions
 	//
+
+	UserFeed(*model.User) ([]*model.Feed, error)
+
+	RepoList(*model.User) ([]*model.Repo, error)
+	RepoListLatest(*model.User) ([]*model.Feed, error)
+	RepoBatch([]*model.Repo) error
+
+	PermFind(user *model.User, repo *model.Repo) (*model.Perm, error)
+	PermUpsert(perm *model.Perm) error
+	PermBatch(perms []*model.Perm) error
+	PermDelete(perm *model.Perm) error
+	PermFlush(user *model.User, before int64) error
 
 	ConfigLoad(int64) (*model.Config, error)
 	ConfigFind(*model.Repo, string) (*model.Config, error)
@@ -134,6 +153,8 @@ type Store interface {
 	TaskList() ([]*model.Task, error)
 	TaskInsert(*model.Task) error
 	TaskDelete(string) error
+
+	Ping() error
 }
 
 // GetUser gets a user by unique ID.
@@ -149,14 +170,6 @@ func GetUserLogin(c context.Context, login string) (*model.User, error) {
 // GetUserList gets a list of all users in the system.
 func GetUserList(c context.Context) ([]*model.User, error) {
 	return FromContext(c).GetUserList()
-}
-
-// GetUserFeed gets a user activity feed.
-func GetUserFeed(c context.Context, listof []*model.RepoLite, latest bool) ([]*model.Feed, error) {
-	if latest {
-		return FromContext(c).GetUserFeedLatest(listof)
-	}
-	return FromContext(c).GetUserFeed(listof)
 }
 
 // GetUserCount gets a count of all users in the system.
@@ -186,10 +199,6 @@ func GetRepoName(c context.Context, name string) (*model.Repo, error) {
 
 func GetRepoOwnerName(c context.Context, owner, name string) (*model.Repo, error) {
 	return FromContext(c).GetRepoName(owner + "/" + name)
-}
-
-func GetRepoListOf(c context.Context, listof []*model.RepoLite) ([]*model.Repo, error) {
-	return FromContext(c).GetRepoListOf(listof)
 }
 
 func CreateRepo(c context.Context, repo *model.Repo) error {
@@ -228,8 +237,8 @@ func GetBuildLastBefore(c context.Context, repo *model.Repo, branch string, numb
 	return FromContext(c).GetBuildLastBefore(repo, branch, number)
 }
 
-func GetBuildList(c context.Context, repo *model.Repo) ([]*model.Build, error) {
-	return FromContext(c).GetBuildList(repo)
+func GetBuildList(c context.Context, repo *model.Repo, page int) ([]*model.Build, error) {
+	return FromContext(c).GetBuildList(repo, page)
 }
 
 func GetBuildQueue(c context.Context) ([]*model.Feed, error) {

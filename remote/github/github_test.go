@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package github
 
 import (
@@ -106,23 +120,6 @@ func Test_github(t *testing.T) {
 			})
 			g.It("Should handle a not found error", func() {
 				_, err := c.Perm(fakeUser, fakeRepoNotFound.Owner, fakeRepoNotFound.Name)
-				g.Assert(err != nil).IsTrue()
-			})
-		})
-
-		g.Describe("Requesting organization permissions", func() {
-			g.It("Should return the permission details of an admin", func() {
-				perm, err := c.TeamPerm(fakeUser, "octocat")
-				g.Assert(err == nil).IsTrue()
-				g.Assert(perm.Admin).IsTrue()
-			})
-			g.It("Should return the permission details of a member", func() {
-				perm, err := c.TeamPerm(fakeUser, "github")
-				g.Assert(err == nil).IsTrue()
-				g.Assert(perm.Admin).IsFalse()
-			})
-			g.It("Should handle a not found error", func() {
-				_, err := c.TeamPerm(fakeUser, "org_not_found")
 				g.Assert(err != nil).IsTrue()
 			})
 		})

@@ -1,3 +1,17 @@
+// Copyright 2018 Drone.IO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package github
 
 import (
@@ -168,16 +182,6 @@ func (c *client) Teams(u *model.User) ([]*model.Team, error) {
 	return teams, nil
 }
 
-// TeamPerm returns the user permissions for the named GitHub organization.
-func (c *client) TeamPerm(u *model.User, org string) (*model.Perm, error) {
-	client := c.newClientToken(u.Token)
-	membership, _, err := client.Organizations.GetOrgMembership(u.Login, org)
-	if err != nil {
-		return nil, err
-	}
-	return convertTeamPerm(membership), nil
-}
-
 // Repo returns the named GitHub repository.
 func (c *client) Repo(u *model.User, owner, name string) (*model.Repo, error) {
 	client := c.newClientToken(u.Token)
@@ -190,20 +194,20 @@ func (c *client) Repo(u *model.User, owner, name string) (*model.Repo, error) {
 
 // Repos returns a list of all repositories for GitHub account, including
 // organization repositories.
-func (c *client) Repos(u *model.User) ([]*model.RepoLite, error) {
+func (c *client) Repos(u *model.User) ([]*model.Repo, error) {
 	client := c.newClientToken(u.Token)
 
 	opts := new(github.RepositoryListOptions)
 	opts.PerPage = 100
 	opts.Page = 1
 
-	var repos []*model.RepoLite
+	var repos []*model.Repo
 	for opts.Page > 0 {
 		list, resp, err := client.Repositories.List("", opts)
 		if err != nil {
 			return nil, err
 		}
-		repos = append(repos, convertRepoList(list)...)
+		repos = append(repos, convertRepoList(list, c.PrivateMode)...)
 		opts.Page = resp.NextPage
 	}
 	return repos, nil
